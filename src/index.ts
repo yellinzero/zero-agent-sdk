@@ -179,196 +179,38 @@ export {
 } from './permissions/types.js';
 
 // ---------------------------------------------------------------------------
-// Providers
+// Providers — type-only re-exports
+//
+// Runtime provider imports should use sub-path entries for tree-shaking:
+//   import { anthropic } from 'zero-agent-sdk/providers/anthropic'
+//   import { openai }    from 'zero-agent-sdk/providers/openai'
 // ---------------------------------------------------------------------------
 
-// Alibaba (Qwen)
 export type { AlibabaProviderConfig } from './providers/alibaba/index.js';
-export {
-  ALIBABA_MODELS,
-  AlibabaProvider,
-  alibaba,
-  createAlibabaProvider,
-  getAlibabaModelInfo,
-} from './providers/alibaba/index.js';
-// Amazon Bedrock
 export type { BedrockProviderConfig } from './providers/amazon-bedrock/index.js';
-export {
-  BEDROCK_MODELS,
-  BedrockProvider,
-  bedrock,
-  createBedrockProvider,
-  getBedrockModelInfo,
-} from './providers/amazon-bedrock/index.js';
-// Anthropic
-export {
-  AnthropicProvider,
-  anthropic,
-  createAnthropicProvider,
-} from './providers/anthropic/index.js';
-// Azure OpenAI
 export type { AzureOpenAIProviderConfig } from './providers/azure/index.js';
-export {
-  AZURE_MODELS,
-  AzureOpenAIProvider,
-  azure,
-  createAzureOpenAIProvider,
-  getAzureModelInfo,
-} from './providers/azure/index.js';
-// Baseten
 export type { BasetenProviderConfig } from './providers/baseten/index.js';
-export {
-  BASETEN_MODELS,
-  BasetenProvider,
-  baseten,
-  createBasetenProvider,
-  getBasetenModelInfo,
-} from './providers/baseten/index.js';
-// Cerebras
 export type { CerebrasProviderConfig } from './providers/cerebras/index.js';
-export {
-  CEREBRAS_MODELS,
-  CerebrasProvider,
-  cerebras,
-  createCerebrasProvider,
-  getCerebrasModelInfo,
-} from './providers/cerebras/index.js';
-// Cohere
 export type { CohereProviderConfig } from './providers/cohere/index.js';
-export {
-  COHERE_MODELS,
-  CohereProvider,
-  cohere,
-  createCohereProvider,
-  getCohereModelInfo,
-} from './providers/cohere/index.js';
-// DeepInfra
 export type { DeepInfraProviderConfig } from './providers/deepinfra/index.js';
-export {
-  createDeepInfraProvider,
-  DEEPINFRA_MODELS,
-  DeepInfraProvider,
-  deepinfra,
-  getDeepInfraModelInfo,
-} from './providers/deepinfra/index.js';
-// DeepSeek
 export type { DeepSeekProviderConfig } from './providers/deepseek/index.js';
-export {
-  createDeepSeekProvider,
-  DEEPSEEK_MODELS,
-  DeepSeekProvider,
-  deepseek,
-  getDeepSeekModelInfo,
-} from './providers/deepseek/index.js';
-// Fireworks AI
 export type { FireworksProviderConfig } from './providers/fireworks/index.js';
-export {
-  createFireworksProvider,
-  FIREWORKS_MODELS,
-  FireworksProvider,
-  fireworks,
-  getFireworksModelInfo,
-} from './providers/fireworks/index.js';
-// Google Gemini
 export type { GoogleProviderConfig } from './providers/google/index.js';
-export {
-  createGoogleProvider,
-  GOOGLE_MODELS,
-  GoogleProvider,
-  getGoogleModelInfo,
-  google,
-} from './providers/google/index.js';
-// Google Vertex AI
 export type { VertexAIProviderConfig } from './providers/google-vertex/index.js';
-export {
-  createVertexAIProvider,
-  getVertexModelInfo,
-  googleVertex,
-  VERTEX_MODELS,
-  VertexAIProvider,
-} from './providers/google-vertex/index.js';
-// Groq
 export type { GroqProviderConfig } from './providers/groq/index.js';
-export {
-  createGroqProvider,
-  GROQ_MODELS,
-  GroqProvider,
-  getGroqModelInfo,
-  groq,
-} from './providers/groq/index.js';
-// Hugging Face
 export type { HuggingFaceProviderConfig } from './providers/huggingface/index.js';
-export {
-  createHuggingFaceProvider,
-  getHuggingFaceModelInfo,
-  HUGGINGFACE_MODELS,
-  HuggingFaceProvider,
-  huggingface,
-} from './providers/huggingface/index.js';
-// Mistral
 export type { MistralProviderConfig } from './providers/mistral/index.js';
-export {
-  createMistralProvider,
-  getMistralModelInfo,
-  MISTRAL_MODELS,
-  MistralProvider,
-  mistral,
-} from './providers/mistral/index.js';
-// Moonshot AI
 export type { MoonshotAIProviderConfig } from './providers/moonshotai/index.js';
-export {
-  createMoonshotAIProvider,
-  getMoonshotAIModelInfo,
-  MOONSHOTAI_MODELS,
-  MoonshotAIProvider,
-  moonshotai,
-} from './providers/moonshotai/index.js';
-// Open Responses
 export type { OpenResponsesProviderConfig } from './providers/open-responses/index.js';
-export {
-  createOpenResponses,
-  OPEN_RESPONSES_DEFAULT_MODEL_INFO,
-  OpenResponsesProvider,
-  openResponses,
-} from './providers/open-responses/index.js';
-// OpenAI
 export type { OpenAIProviderConfig } from './providers/openai/index.js';
-export {
-  createOpenAIProvider,
-  getOpenAIModelInfo,
-  OPENAI_MODELS,
-  OpenAIProvider,
-  openai,
-} from './providers/openai/index.js';
-// OpenAI-Compatible base
 export type {
   GenericOpenAICompatibleConfig,
   OpenAICompatibleConfig,
 } from './providers/openai-compatible/index.js';
-export {
-  createOpenAICompatible,
-  GenericOpenAICompatibleProvider,
-  OpenAICompatibleProvider,
-} from './providers/openai-compatible/index.js';
-// Perplexity
 export type { PerplexityProviderConfig } from './providers/perplexity/index.js';
-export {
-  createPerplexityProvider,
-  getPerplexityModelInfo,
-  PERPLEXITY_MODELS,
-  PerplexityProvider,
-  perplexity,
-} from './providers/perplexity/index.js';
+// Provider registry (lightweight — no provider SDK dependencies)
 export { defaultRegistry, ProviderRegistry } from './providers/registry.js';
-// Together AI
 export type { TogetherAIProviderConfig } from './providers/togetherai/index.js';
-export {
-  createTogetherAIProvider,
-  getTogetherAIModelInfo,
-  TOGETHERAI_MODELS,
-  TogetherAIProvider,
-  togetherai,
-} from './providers/togetherai/index.js';
 // Provider types
 export type {
   GenerateMessageParams,
@@ -382,15 +224,7 @@ export type {
   ProviderUsage,
   StreamMessageParams,
 } from './providers/types.js';
-// xAI (Grok)
 export type { XAIProviderConfig } from './providers/xai/index.js';
-export {
-  createXAIProvider,
-  getXAIModelInfo,
-  XAI_MODELS,
-  XAIProvider,
-  xai,
-} from './providers/xai/index.js';
 
 // ---------------------------------------------------------------------------
 // Tools
@@ -508,11 +342,10 @@ export type { Document, RetrievalOptions, Retriever } from './retrieval/types.js
 export { retrieverTool } from './retrieval/types.js';
 
 // ---------------------------------------------------------------------------
-// OpenAI Embeddings
+// OpenAI Embeddings — use sub-path: 'zero-agent-sdk/providers/openai'
 // ---------------------------------------------------------------------------
 
 export type { OpenAIEmbeddingConfig } from './providers/openai/embedding.js';
-export { createOpenAIEmbedding, OpenAIEmbeddingModel } from './providers/openai/embedding.js';
 
 // ---------------------------------------------------------------------------
 // Multimodal Interfaces
@@ -570,60 +403,16 @@ export {
 } from './generate.js';
 
 // ---------------------------------------------------------------------------
-// Image Providers
+// Image Providers — use sub-path entries:
+//   import { createBlackForestLabs } from 'zero-agent-sdk/providers/black-forest-labs'
 // ---------------------------------------------------------------------------
 
-export {
-  BFL_IMAGE_MODELS,
-  BlackForestLabsImageModel,
-  createBlackForestLabs,
-} from './providers/black-forest-labs/index.js';
-export { createFal, FAL_IMAGE_MODELS, FalImageModel } from './providers/fal/index.js';
-export { createLuma, LUMA_IMAGE_MODELS, LumaImageModel } from './providers/luma/index.js';
-export { createProdia, PRODIA_IMAGE_MODELS, ProdiaImageModel } from './providers/prodia/index.js';
-export {
-  createReplicate,
-  REPLICATE_IMAGE_MODELS,
-  ReplicateImageModel,
-} from './providers/replicate/index.js';
-
 // ---------------------------------------------------------------------------
-// Video Providers
+// Video Providers — use sub-path entries:
+//   import { createByteDance } from 'zero-agent-sdk/providers/bytedance'
 // ---------------------------------------------------------------------------
 
-export {
-  BYTEDANCE_MODELS,
-  ByteDanceVideoModel,
-  createByteDance,
-} from './providers/bytedance/index.js';
-export {
-  createKlingAI,
-  KLINGAI_MODELS,
-  KlingAIVideoModel,
-} from './providers/klingai/index.js';
-
 // ---------------------------------------------------------------------------
-// Audio Providers
+// Audio Providers — use sub-path entries:
+//   import { createElevenLabs } from 'zero-agent-sdk/providers/elevenlabs'
 // ---------------------------------------------------------------------------
-
-export {
-  ASSEMBLYAI_MODELS,
-  AssemblyAITranscriptionModel,
-  createAssemblyAI,
-} from './providers/assemblyai/index.js';
-export {
-  createDeepgram,
-  DEEPGRAM_MODELS,
-  DeepgramSpeechModel,
-  DeepgramTranscriptionModel,
-} from './providers/deepgram/index.js';
-export {
-  createElevenLabs,
-  ELEVENLABS_MODELS,
-  ElevenLabsSpeechModel,
-  ElevenLabsTranscriptionModel,
-} from './providers/elevenlabs/index.js';
-export { createGladia, GLADIA_MODELS, GladiaTranscriptionModel } from './providers/gladia/index.js';
-export { createHume, HUME_MODELS, HumeSpeechModel } from './providers/hume/index.js';
-export { createLMNT, LMNT_MODELS, LMNTSpeechModel } from './providers/lmnt/index.js';
-export { createRevAI, REVAI_MODELS, RevAITranscriptionModel } from './providers/revai/index.js';
