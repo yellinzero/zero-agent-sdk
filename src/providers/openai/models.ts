@@ -1,0 +1,132 @@
+/**
+ * OpenAI model catalog with metadata.
+ */
+
+import type { ModelInfo } from '../types.js';
+
+export const OPENAI_MODELS: Record<string, ModelInfo> = {
+  'gpt-4o': {
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
+    supportsThinking: false,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 2.5,
+    outputTokenCostPer1M: 10,
+  },
+  'gpt-4o-2024-11-20': {
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
+    supportsThinking: false,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 2.5,
+    outputTokenCostPer1M: 10,
+  },
+  'gpt-4o-mini': {
+    contextWindow: 128_000,
+    maxOutputTokens: 16_384,
+    supportsThinking: false,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 0.15,
+    outputTokenCostPer1M: 0.6,
+  },
+  'gpt-4-turbo': {
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    supportsThinking: false,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 10,
+    outputTokenCostPer1M: 30,
+  },
+  'gpt-4': {
+    contextWindow: 8_192,
+    maxOutputTokens: 8_192,
+    supportsThinking: false,
+    supportsToolUse: true,
+    supportsImages: false,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 30,
+    outputTokenCostPer1M: 60,
+  },
+  o1: {
+    contextWindow: 200_000,
+    maxOutputTokens: 100_000,
+    supportsThinking: true,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 15,
+    outputTokenCostPer1M: 60,
+  },
+  'o1-mini': {
+    contextWindow: 128_000,
+    maxOutputTokens: 65_536,
+    supportsThinking: true,
+    supportsToolUse: true,
+    supportsImages: false,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 3,
+    outputTokenCostPer1M: 12,
+  },
+  'o1-pro': {
+    contextWindow: 200_000,
+    maxOutputTokens: 100_000,
+    supportsThinking: true,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 150,
+    outputTokenCostPer1M: 600,
+  },
+  o3: {
+    contextWindow: 200_000,
+    maxOutputTokens: 100_000,
+    supportsThinking: true,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 10,
+    outputTokenCostPer1M: 40,
+  },
+  'o3-mini': {
+    contextWindow: 200_000,
+    maxOutputTokens: 100_000,
+    supportsThinking: true,
+    supportsToolUse: true,
+    supportsImages: false,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 1.1,
+    outputTokenCostPer1M: 4.4,
+  },
+  'o4-mini': {
+    contextWindow: 200_000,
+    maxOutputTokens: 100_000,
+    supportsThinking: true,
+    supportsToolUse: true,
+    supportsImages: true,
+    supportsPdfInput: false,
+    inputTokenCostPer1M: 1.1,
+    outputTokenCostPer1M: 4.4,
+  },
+};
+
+/** Default model info for unknown OpenAI models */
+const DEFAULT_MODEL_INFO: ModelInfo = {
+  contextWindow: 128_000,
+  maxOutputTokens: 16_384,
+  supportsThinking: false,
+  supportsToolUse: true,
+  supportsImages: true,
+  supportsPdfInput: false,
+};
+
+export function getOpenAIModelInfo(modelId: string): ModelInfo {
+  return OPENAI_MODELS[modelId] ?? DEFAULT_MODEL_INFO;
+}

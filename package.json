@@ -1,0 +1,465 @@
+{
+  "name": "zero-agent-sdk",
+  "version": "0.1.0",
+  "description": "Zero Agent SDK - A provider-agnostic AI agent framework",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./providers/anthropic": {
+      "import": {
+        "types": "./dist/providers/anthropic/index.d.ts",
+        "default": "./dist/providers/anthropic/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/anthropic/index.d.cts",
+        "default": "./dist/providers/anthropic/index.cjs"
+      }
+    },
+    "./providers/openai": {
+      "import": {
+        "types": "./dist/providers/openai/index.d.ts",
+        "default": "./dist/providers/openai/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/openai/index.d.cts",
+        "default": "./dist/providers/openai/index.cjs"
+      }
+    },
+    "./providers/openai-compatible": {
+      "import": {
+        "types": "./dist/providers/openai-compatible/index.d.ts",
+        "default": "./dist/providers/openai-compatible/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/openai-compatible/index.d.cts",
+        "default": "./dist/providers/openai-compatible/index.cjs"
+      }
+    },
+    "./providers/deepseek": {
+      "import": {
+        "types": "./dist/providers/deepseek/index.d.ts",
+        "default": "./dist/providers/deepseek/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/deepseek/index.d.cts",
+        "default": "./dist/providers/deepseek/index.cjs"
+      }
+    },
+    "./providers/mistral": {
+      "import": {
+        "types": "./dist/providers/mistral/index.d.ts",
+        "default": "./dist/providers/mistral/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/mistral/index.d.cts",
+        "default": "./dist/providers/mistral/index.cjs"
+      }
+    },
+    "./providers/alibaba": {
+      "import": {
+        "types": "./dist/providers/alibaba/index.d.ts",
+        "default": "./dist/providers/alibaba/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/alibaba/index.d.cts",
+        "default": "./dist/providers/alibaba/index.cjs"
+      }
+    },
+    "./providers/azure": {
+      "import": {
+        "types": "./dist/providers/azure/index.d.ts",
+        "default": "./dist/providers/azure/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/azure/index.d.cts",
+        "default": "./dist/providers/azure/index.cjs"
+      }
+    },
+    "./providers/google": {
+      "import": {
+        "types": "./dist/providers/google/index.d.ts",
+        "default": "./dist/providers/google/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/google/index.d.cts",
+        "default": "./dist/providers/google/index.cjs"
+      }
+    },
+    "./providers/xai": {
+      "import": {
+        "types": "./dist/providers/xai/index.d.ts",
+        "default": "./dist/providers/xai/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/xai/index.d.cts",
+        "default": "./dist/providers/xai/index.cjs"
+      }
+    },
+    "./providers/groq": {
+      "import": {
+        "types": "./dist/providers/groq/index.d.ts",
+        "default": "./dist/providers/groq/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/groq/index.d.cts",
+        "default": "./dist/providers/groq/index.cjs"
+      }
+    },
+    "./providers/togetherai": {
+      "import": {
+        "types": "./dist/providers/togetherai/index.d.ts",
+        "default": "./dist/providers/togetherai/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/togetherai/index.d.cts",
+        "default": "./dist/providers/togetherai/index.cjs"
+      }
+    },
+    "./providers/huggingface": {
+      "import": {
+        "types": "./dist/providers/huggingface/index.d.ts",
+        "default": "./dist/providers/huggingface/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/huggingface/index.d.cts",
+        "default": "./dist/providers/huggingface/index.cjs"
+      }
+    },
+    "./providers/moonshotai": {
+      "import": {
+        "types": "./dist/providers/moonshotai/index.d.ts",
+        "default": "./dist/providers/moonshotai/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/moonshotai/index.d.cts",
+        "default": "./dist/providers/moonshotai/index.cjs"
+      }
+    },
+    "./providers/google-vertex": {
+      "import": {
+        "types": "./dist/providers/google-vertex/index.d.ts",
+        "default": "./dist/providers/google-vertex/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/google-vertex/index.d.cts",
+        "default": "./dist/providers/google-vertex/index.cjs"
+      }
+    },
+    "./providers/amazon-bedrock": {
+      "import": {
+        "types": "./dist/providers/amazon-bedrock/index.d.ts",
+        "default": "./dist/providers/amazon-bedrock/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/amazon-bedrock/index.d.cts",
+        "default": "./dist/providers/amazon-bedrock/index.cjs"
+      }
+    },
+    "./providers/perplexity": {
+      "import": {
+        "types": "./dist/providers/perplexity/index.d.ts",
+        "default": "./dist/providers/perplexity/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/perplexity/index.d.cts",
+        "default": "./dist/providers/perplexity/index.cjs"
+      }
+    },
+    "./providers/fireworks": {
+      "import": {
+        "types": "./dist/providers/fireworks/index.d.ts",
+        "default": "./dist/providers/fireworks/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/fireworks/index.d.cts",
+        "default": "./dist/providers/fireworks/index.cjs"
+      }
+    },
+    "./providers/cerebras": {
+      "import": {
+        "types": "./dist/providers/cerebras/index.d.ts",
+        "default": "./dist/providers/cerebras/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/cerebras/index.d.cts",
+        "default": "./dist/providers/cerebras/index.cjs"
+      }
+    },
+    "./providers/deepinfra": {
+      "import": {
+        "types": "./dist/providers/deepinfra/index.d.ts",
+        "default": "./dist/providers/deepinfra/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/deepinfra/index.d.cts",
+        "default": "./dist/providers/deepinfra/index.cjs"
+      }
+    },
+    "./providers/baseten": {
+      "import": {
+        "types": "./dist/providers/baseten/index.d.ts",
+        "default": "./dist/providers/baseten/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/baseten/index.d.cts",
+        "default": "./dist/providers/baseten/index.cjs"
+      }
+    },
+    "./providers/cohere": {
+      "import": {
+        "types": "./dist/providers/cohere/index.d.ts",
+        "default": "./dist/providers/cohere/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/cohere/index.d.cts",
+        "default": "./dist/providers/cohere/index.cjs"
+      }
+    },
+    "./providers/open-responses": {
+      "import": {
+        "types": "./dist/providers/open-responses/index.d.ts",
+        "default": "./dist/providers/open-responses/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/open-responses/index.d.cts",
+        "default": "./dist/providers/open-responses/index.cjs"
+      }
+    },
+    "./providers/black-forest-labs": {
+      "import": {
+        "types": "./dist/providers/black-forest-labs/index.d.ts",
+        "default": "./dist/providers/black-forest-labs/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/black-forest-labs/index.d.cts",
+        "default": "./dist/providers/black-forest-labs/index.cjs"
+      }
+    },
+    "./providers/replicate": {
+      "import": {
+        "types": "./dist/providers/replicate/index.d.ts",
+        "default": "./dist/providers/replicate/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/replicate/index.d.cts",
+        "default": "./dist/providers/replicate/index.cjs"
+      }
+    },
+    "./providers/luma": {
+      "import": {
+        "types": "./dist/providers/luma/index.d.ts",
+        "default": "./dist/providers/luma/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/luma/index.d.cts",
+        "default": "./dist/providers/luma/index.cjs"
+      }
+    },
+    "./providers/fal": {
+      "import": {
+        "types": "./dist/providers/fal/index.d.ts",
+        "default": "./dist/providers/fal/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/fal/index.d.cts",
+        "default": "./dist/providers/fal/index.cjs"
+      }
+    },
+    "./providers/prodia": {
+      "import": {
+        "types": "./dist/providers/prodia/index.d.ts",
+        "default": "./dist/providers/prodia/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/prodia/index.d.cts",
+        "default": "./dist/providers/prodia/index.cjs"
+      }
+    },
+    "./providers/bytedance": {
+      "import": {
+        "types": "./dist/providers/bytedance/index.d.ts",
+        "default": "./dist/providers/bytedance/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/bytedance/index.d.cts",
+        "default": "./dist/providers/bytedance/index.cjs"
+      }
+    },
+    "./providers/klingai": {
+      "import": {
+        "types": "./dist/providers/klingai/index.d.ts",
+        "default": "./dist/providers/klingai/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/klingai/index.d.cts",
+        "default": "./dist/providers/klingai/index.cjs"
+      }
+    },
+    "./providers/elevenlabs": {
+      "import": {
+        "types": "./dist/providers/elevenlabs/index.d.ts",
+        "default": "./dist/providers/elevenlabs/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/elevenlabs/index.d.cts",
+        "default": "./dist/providers/elevenlabs/index.cjs"
+      }
+    },
+    "./providers/deepgram": {
+      "import": {
+        "types": "./dist/providers/deepgram/index.d.ts",
+        "default": "./dist/providers/deepgram/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/deepgram/index.d.cts",
+        "default": "./dist/providers/deepgram/index.cjs"
+      }
+    },
+    "./providers/assemblyai": {
+      "import": {
+        "types": "./dist/providers/assemblyai/index.d.ts",
+        "default": "./dist/providers/assemblyai/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/assemblyai/index.d.cts",
+        "default": "./dist/providers/assemblyai/index.cjs"
+      }
+    },
+    "./providers/revai": {
+      "import": {
+        "types": "./dist/providers/revai/index.d.ts",
+        "default": "./dist/providers/revai/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/revai/index.d.cts",
+        "default": "./dist/providers/revai/index.cjs"
+      }
+    },
+    "./providers/gladia": {
+      "import": {
+        "types": "./dist/providers/gladia/index.d.ts",
+        "default": "./dist/providers/gladia/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/gladia/index.d.cts",
+        "default": "./dist/providers/gladia/index.cjs"
+      }
+    },
+    "./providers/lmnt": {
+      "import": {
+        "types": "./dist/providers/lmnt/index.d.ts",
+        "default": "./dist/providers/lmnt/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/lmnt/index.d.cts",
+        "default": "./dist/providers/lmnt/index.cjs"
+      }
+    },
+    "./providers/hume": {
+      "import": {
+        "types": "./dist/providers/hume/index.d.ts",
+        "default": "./dist/providers/hume/index.js"
+      },
+      "require": {
+        "types": "./dist/providers/hume/index.d.cts",
+        "default": "./dist/providers/hume/index.cjs"
+      }
+    },
+    "./tools": {
+      "import": {
+        "types": "./dist/tools/index.d.ts",
+        "default": "./dist/tools/index.js"
+      },
+      "require": {
+        "types": "./dist/tools/index.d.cts",
+        "default": "./dist/tools/index.cjs"
+      }
+    },
+    "./mcp": {
+      "import": {
+        "types": "./dist/mcp/index.d.ts",
+        "default": "./dist/mcp/index.js"
+      },
+      "require": {
+        "types": "./dist/mcp/index.d.cts",
+        "default": "./dist/mcp/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check --write .",
+    "format": "biome format --write .",
+    "check": "biome check .",
+    "prepublishOnly": "pnpm build",
+    "prepare": "husky",
+    "changeset": "changeset",
+    "release": "changeset publish",
+    "pub:beta": "npm publish --tag beta --access public"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.30.0",
+    "openai": ">=4.0.0",
+    "@aws-sdk/client-bedrock-runtime": ">=3.0.0",
+    "@modelcontextprotocol/sdk": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    },
+    "@aws-sdk/client-bedrock-runtime": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
+    "@biomejs/biome": "^2.3.0",
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.27.0",
+    "@types/node": "^25.6.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json}": [
+      "biome check --write"
+    ]
+  }
+}
