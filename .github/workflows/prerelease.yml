@@ -17,6 +17,8 @@ jobs:
     name: Publish Beta
     if: github.event.label.name == '🚀 autorelease'
     runs-on: ubuntu-latest
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v6
         with:
