@@ -28,18 +28,32 @@
 pnpm add zero-agent-sdk
 ```
 
-按需安装对应 Provider 的 SDK：
+### Provider SDK（按需安装）
+
+Provider SDK 作为 **optional peer dependencies**，用到哪个 Provider 就装哪个：
 
 ```bash
+# OpenAI / DeepSeek / Groq / Together AI / Perplexity / 其他 OpenAI 兼容
+pnpm add openai
+
 # Anthropic
 pnpm add @anthropic-ai/sdk
 
-# OpenAI / OpenAI 兼容
-pnpm add openai
-
 # AWS Bedrock
 pnpm add @aws-sdk/client-bedrock-runtime
+
+# MCP 协议支持
+pnpm add @modelcontextprotocol/sdk
 ```
+
+> 如果缺少对应的 SDK，运行时会抛出明确的错误提示。
+
+| peer dependency | 适用 Provider |
+|----------------|--------------|
+| `openai` | OpenAI, DeepSeek, Azure, Groq, Together AI, Perplexity, Fireworks, Cerebras, DeepInfra, Baseten, Cohere, HuggingFace, MoonshotAI, xAI, OpenAI-Compatible |
+| `@anthropic-ai/sdk` | Anthropic |
+| `@aws-sdk/client-bedrock-runtime` | Amazon Bedrock |
+| `@modelcontextprotocol/sdk` | MCP 集成（stdio/SSE/HTTP 传输） |
 
 ## 快速开始
 
