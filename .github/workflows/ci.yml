@@ -26,6 +26,9 @@ jobs:
           node-version: 20
           cache: pnpm
 
+      - name: Refresh lockfile from git object
+        run: git show HEAD:pnpm-lock.yaml > pnpm-lock.yaml
+
       - run: pnpm install --frozen-lockfile
 
       - name: Lint
