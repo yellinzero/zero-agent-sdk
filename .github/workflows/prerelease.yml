@@ -22,18 +22,13 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.11.0
+      - run: corepack enable
 
       - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: pnpm
           registry-url: https://registry.npmjs.org
-
-      - name: Refresh lockfile from git object
-        run: git show HEAD:pnpm-lock.yaml > pnpm-lock.yaml
 
       - run: pnpm install --frozen-lockfile
 
