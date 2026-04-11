@@ -37,3 +37,5 @@ jobs:
 
       - name: Test
         run: pnpm test
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
