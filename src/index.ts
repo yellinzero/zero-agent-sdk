@@ -57,6 +57,7 @@ export type {
   PermissionRequestEvent,
   TextEvent,
   ThinkingEvent,
+  ToolUseDeltaEvent,
   ToolUseEndEvent,
   ToolUseStartEvent,
   TurnEndEvent,

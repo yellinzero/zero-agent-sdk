@@ -526,8 +526,18 @@ export async function* agentLoop(
                 } else if (event.delta.type === 'input_json_delta') {
                   const builder = blockBuilders.get(event.index);
                   if (builder && builder.type === 'tool_use') {
-                    builder._jsonAccumulator =
-                      (builder._jsonAccumulator || '') + event.delta.partial_json;
+                    const chunk = event.delta.partial_json;
+                    if (chunk) {
+                      const accumulated = (builder._jsonAccumulator || '') + chunk;
+                      builder._jsonAccumulator = accumulated;
+                      bufferEvent({
+                        type: 'tool_use_delta',
+                        toolUseId: builder.id ?? '',
+                        toolName: builder.name ?? '',
+                        partialJson: chunk,
+                        accumulatedJson: accumulated,
+                      });
+                    }
                   }
                 }
                 break;

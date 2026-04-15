@@ -89,6 +89,10 @@ for await (const event of agent.stream('解释这段代码的作用')) {
     case 'tool_use_start':
       console.log(`调用工具: ${event.toolName}`);
       break;
+    case 'tool_use_delta':
+      // 工具参数流式片段（JSON 字符串）
+      process.stdout.write(event.partialJson);
+      break;
     case 'tool_use_end':
       console.log(`工具结果: ${event.toolName}`);
       break;
@@ -552,6 +556,7 @@ const agent = await createAgentAsync({
 | `text` | 模型生成的文本片段 |
 | `thinking` | 模型的思考过程（需模型支持） |
 | `tool_use_start` | 工具调用开始 |
+| `tool_use_delta` | 工具参数的流式 JSON 片段（可选，视 provider 支持） |
 | `tool_use_end` | 工具调用结束（含结果） |
 | `turn_start` | 新一轮开始 |
 | `turn_end` | 一轮结束 |
@@ -559,6 +564,37 @@ const agent = await createAgentAsync({
 | `error` | 错误事件 |
 | `permission_request` | 权限请求（需用户确认） |
 | `compact` | 上下文压缩事件 |
+
+### 流式工具参数 (`tool_use_delta`)
+
+当模型生成较长的工具输入时（例如复杂 JSON、代码生成、结构化内容），SDK 会在 `tool_use_start` 与 `tool_use_end` 之间发出若干 `tool_use_delta` 事件，承载 provider 实际推送的 JSON 片段：
+
+```typescript
+interface ToolUseDeltaEvent {
+  type: 'tool_use_delta';
+  toolUseId: string;
+  toolName: string;
+  partialJson: string;      // 本次 chunk
+  accumulatedJson: string;  // 迄今累计字符串（中途不保证是合法 JSON）
+}
+```
+
+事件顺序保证：
+
+```text
+tool_use_start → tool_use_delta* → tool_use_end
+```
+
+`accumulatedJson` 在流完成前可能是不完整的 JSON 前缀；若需在完成前提取字段，请使用增量 JSON 解析器（如 `partial-json`、`jsonparse`）。
+
+Provider 兼容性：
+
+| Provider 系列 | 是否流式发送工具参数 | 说明 |
+|---|---|---|
+| Anthropic (Claude 原生) | ✅ | 原生 `input_json_delta`，逐 token 推送 |
+| OpenAI / Azure / 兼容家族（DeepSeek, Moonshot, Qwen, Groq, xAI, TogetherAI 等） | ✅ | `tool_calls[].function.arguments` 逐 chunk 合流到同一路径 |
+| Google Gemini / Vertex / Bedrock | ✅ | 内部规范化为 `input_json_delta` |
+| 非合规 OpenAI 兼容端点 | ⚠️ | 可能一次性返回完整参数，退化为单个 delta 事件 |
 
 ## AgentResult
 
