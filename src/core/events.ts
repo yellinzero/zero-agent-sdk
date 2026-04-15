@@ -8,6 +8,7 @@ export type AgentEvent =
   | TextEvent
   | ThinkingEvent
   | ToolUseStartEvent
+  | ToolUseDeltaEvent
   | ToolUseEndEvent
   | TurnStartEvent
   | TurnEndEvent
@@ -31,6 +32,14 @@ export interface ToolUseStartEvent {
   toolName: string;
   toolUseId: string;
   input: unknown;
+}
+
+export interface ToolUseDeltaEvent {
+  type: 'tool_use_delta';
+  toolUseId: string;
+  toolName: string;
+  partialJson: string;
+  accumulatedJson: string;
 }
 
 export interface ToolUseEndEvent {
