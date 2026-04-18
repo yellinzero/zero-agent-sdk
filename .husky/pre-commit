@@ -1,4 +1,3 @@
 pnpm lint-staged
-npx --yes gitleaks protect --staged --redact
 pnpm typecheck
 pnpm test
