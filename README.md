@@ -118,9 +118,7 @@ for await (const event of result.fullStream) {
 console.log(await result.output);
 ```
 
-`output` 是结构化输出的主入口。自 `0.2.0-beta` 起，这套 API 以 beta 形态对外发布。OpenAI / Azure / Gemini / Vertex 会走 native structured decoding；Anthropic / Bedrock 默认走 strict synthesis 路径；其余 OpenAI-compatible provider 会按模型能力显式声明是否支持 `json_object` / `json_schema`，不再依赖默认猜测。需要在 synthesis provider 上同时允许普通工具与结构化输出时，可设置 `structuredOutputMode: 'mixed'`。`fullStream` 事件名对齐为 `text-delta` / `object` / `element` / `finish` / `error`，数组 `elementStream` 会在最终完成时补发最后一个元素。
-
-Live 集成测试使用独立目录 `src/__tests__/live/`。运行 `pnpm test:live` 时会只执行 `.live.test.ts` 文件，并在缺少对应 provider secrets 时自动跳过。README 中列出的 provider 表示已实现支持，不代表最近一次发布前一定完成了 live 验证；实际 live 覆盖取决于运行时提供的 secrets。当前这条 beta 发布线已经做过 DeepSeek 和 Open Responses 模式的 live 验证，其余 provider 建议继续按 beta 能力评估后再用于正式生产场景。
+`output` 是结构化输出的主入口。OpenAI / Azure / Gemini / Vertex 会走 native structured decoding；Anthropic / Bedrock 默认走 strict synthesis 路径；其余 OpenAI-compatible provider 会按模型能力显式声明是否支持 `json_object` / `json_schema`，不再依赖默认猜测。需要在 synthesis provider 上同时允许普通工具与结构化输出时，可设置 `structuredOutputMode: 'mixed'`。`fullStream` 事件名对齐为 `text-delta` / `object` / `element` / `finish` / `error`，数组 `elementStream` 会在最终完成时补发最后一个元素。
 
 ### 流式执行
 
@@ -185,6 +183,33 @@ const agent = await createAgentAsync({
 // 创建可恢复的会话
 const session = await agent.createSession({ id: 'my-session' });
 ```
+
+## 发布流程
+
+### 稳定版
+
+稳定版通过 Changesets 和 `main` 分支上的 release workflow 管理。
+
+- 仓库版本基线保留在稳定版本
+- `.changeset/*.md` 用于声明下一次稳定发布的 semver bump
+- 合并到 `main` 后，由 `.github/workflows/release.yml` 负责生成版本变更并发布正式版本
+
+### Beta 版
+
+`0.2.0` 版本线通过 npm `beta` dist-tag 提供 beta 包。
+
+- beta 发布由 `.github/workflows/prerelease.yml` 管理
+- workflow 触发方式为 GitHub Actions 页面手动运行 `Prerelease (Beta)`
+- workflow 输入参数 `ref` 默认为 `dev`，可指定任意需要发布的 git ref
+- beta workflow 会执行 `changeset version --snapshot beta` 生成临时 prerelease 版本，再发布到 npm `beta` dist-tag
+
+### Live 测试
+
+Live 集成测试位于 `src/__tests__/live/`。
+
+- `pnpm test:live` 仅执行 `.live.test.ts` 文件
+- 未提供对应 provider secrets 时，相关 live 用例会自动跳过
+- live 验证范围取决于运行时提供的 provider secrets
 
 ## Provider
 

@@ -1,11 +1,16 @@
 name: Prerelease (Beta)
 
 on:
-  pull_request:
-    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to publish as beta
+        required: true
+        default: dev
+        type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -15,14 +20,13 @@ permissions:
 jobs:
   prerelease:
     name: Publish Beta
-    if: github.event.label.name == '🚀 autorelease'
     runs-on: ubuntu-latest
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
 
       - run: corepack enable
@@ -35,20 +39,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm build
+      - name: Version beta snapshot
+        run: pnpm changeset version --snapshot beta
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set beta version
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          VERSION=$(node -p "require('./package.json').version")
-          BASE_VERSION="${VERSION%%-*}"
-          BETA_VERSION="${BASE_VERSION}-beta.${SHA}"
-          node -e "
-            const pkg = require('./package.json');
-            pkg.version = '${BETA_VERSION}';
-            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          echo "Publishing version: ${BETA_VERSION}"
+      - run: pnpm build
 
       - name: Publish beta to NPM
         run: pnpm pub:beta
