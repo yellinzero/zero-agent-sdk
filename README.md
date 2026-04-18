@@ -75,6 +75,53 @@ const result = await agent.run('帮我创建一个 hello world 程序');
 console.log(result.text);
 ```
 
+### 结构化输出
+
+```typescript
+import { Output } from 'zero-agent-sdk';
+import { z } from 'zod';
+
+const result = await agent.run('提取用户资料', {
+  output: Output.object({
+    schema: z.object({
+      name: z.string(),
+      age: z.number(),
+    }),
+  }),
+});
+
+console.log(result.output.name);
+```
+
+流式结构化输出：
+
+```typescript
+const result = agent.stream('提取用户资料', {
+  output: Output.object({
+    schema: z.object({
+      name: z.string(),
+      age: z.number(),
+    }),
+  }),
+});
+
+for await (const partial of result.partialOutputStream) {
+  console.log(partial);
+}
+
+for await (const event of result.fullStream) {
+  if (event.type === 'object') {
+    console.log('partial object', event.object);
+  }
+}
+
+console.log(await result.output);
+```
+
+`output` 是结构化输出的主入口。自 `0.2.0-beta` 起，这套 API 以 beta 形态对外发布。OpenAI / Azure / Gemini / Vertex 会走 native structured decoding；Anthropic / Bedrock 默认走 strict synthesis 路径；其余 OpenAI-compatible provider 会按模型能力显式声明是否支持 `json_object` / `json_schema`，不再依赖默认猜测。需要在 synthesis provider 上同时允许普通工具与结构化输出时，可设置 `structuredOutputMode: 'mixed'`。`fullStream` 事件名对齐为 `text-delta` / `object` / `element` / `finish` / `error`，数组 `elementStream` 会在最终完成时补发最后一个元素。
+
+Live 集成测试使用独立目录 `src/__tests__/live/`。运行 `pnpm test:live` 时会只执行 `.live.test.ts` 文件，并在缺少对应 provider secrets 时自动跳过。README 中列出的 provider 表示已实现支持，不代表最近一次发布前一定完成了 live 验证；实际 live 覆盖取决于运行时提供的 secrets。当前这条 beta 发布线已经做过 DeepSeek 和 Open Responses 模式的 live 验证，其余 provider 建议继续按 beta 能力评估后再用于正式生产场景。
+
 ### 流式执行
 
 ```typescript

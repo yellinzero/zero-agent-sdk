@@ -1,7 +1,7 @@
 /**
  * AgentImpl — the concrete implementation of the Agent interface.
  * Orchestrates the agent loop, session management, event streaming,
- * MCP auto-connect, and appendSystemPrompt.
+ * MCP auto-connect, structured output, and appendSystemPrompt.
  */
 
 import { randomUUID } from 'crypto';
@@ -14,25 +14,42 @@ import type {
   AgentResult,
   AgentResultContent,
   AgentResultMessage,
+  OutputStreamEvent,
   RunOptions,
+  StreamOutputResult,
+  StructuredAgentResult,
+  StructuredOutputMode,
 } from '../core/agent.js';
-import { AgentError } from '../core/errors.js';
+import { AgentError, StructuredOutputError } from '../core/errors.js';
 import type { AgentEvent } from '../core/events.js';
+import type {
+  InferOutputElement,
+  InferOutputPartial,
+  InferOutputResult,
+  OutputDefinition,
+} from '../core/output.js';
 import type { AgentSession, SessionOptions } from '../core/session.js';
 import type { Usage } from '../core/types.js';
 import { MCPClient } from '../mcp/client.js';
 import { normalizeServerName } from '../mcp/normalization.js';
 import type { MCPConnection } from '../mcp/types.js';
-import type { ProviderContentBlock, ProviderMessage } from '../providers/types.js';
+import {
+  getSupportedResponseFormats,
+  type ProviderContentBlock,
+  type ProviderMessage,
+  resolveResponseFormatStrategy,
+  type ToolChoice,
+} from '../providers/types.js';
 import {
   BackgroundTaskManager,
   BG_MANAGER_KEY,
   type SerializableTaskState,
 } from '../tools/builtin/background-task.js';
+import { isSyntheticStructuredOutputTool } from '../tools/structured-output.js';
 import type { AgentSessionState, SDKTool } from '../tools/types.js';
 import { createLinkedAbortController } from '../utils/abort.js';
 import { AsyncQueue } from '../utils/async-queue.js';
-import { createUserMessage, extractText } from '../utils/messages.js';
+import { createUserMessage } from '../utils/messages.js';
 import { merge } from '../utils/streaming.js';
 import { addUsage, emptyUsage, estimateMessagesTokenCount } from '../utils/tokens.js';
 import { type AgentLoopConfig, agentLoop } from './query.js';
@@ -58,12 +75,80 @@ export class AgentImpl implements Agent {
       ...config,
     };
     this.abortController = new AbortController();
+    this.validateToolChoiceConfig();
+  }
+
+  /**
+   * Fail-fast validation for `toolChoice` against provider capabilities.
+   * Run once at construction so callers see misconfigurations immediately.
+   * Output / responseFormat compatibility is checked lazily per-run, since
+   * `output` is a per-run option.
+   */
+  private validateToolChoiceConfig(toolChoice?: ToolChoice): void {
+    const choice = toolChoice ?? this.config.toolChoice;
+    if (!choice) return;
+    const info = this.config.provider.getModelInfo(this.config.model);
+    if (info.supportsToolChoice === false) {
+      throw new AgentError(
+        `Provider '${this.config.provider.providerId}' / model '${this.config.model}' does not support toolChoice. ` +
+          `Remove the toolChoice option or switch to a provider that honors it.`,
+        'INVALID_CONFIG'
+      );
+    }
+  }
+
+  /**
+   * Validate that a structured `output` definition is compatible with the
+   * provider/model. Performed once per call site so misconfigurations surface
+   * before the loop starts streaming. `runToolChoice` is the per-run override
+   * (if any); the effective toolChoice (run override ?? agent config) must not
+   * conflict with tool-synthesis structured output.
+   */
+  private validateOutputConfig(
+    output: OutputDefinition<any, any, any>,
+    runToolChoice?: ToolChoice,
+    modelId?: string,
+    structuredOutputMode?: StructuredOutputMode
+  ): void {
+    const provider = this.config.provider;
+    const targetModel = modelId ?? this.config.model;
+    const info = provider.getModelInfo(targetModel);
+    const responseFormat = output.responseFormat;
+    if (responseFormat.type === 'text') return;
+
+    const supported = getSupportedResponseFormats(info);
+    const strategy = resolveResponseFormatStrategy(info);
+    const effectiveToolChoice = runToolChoice ?? this.config.toolChoice;
+    const mode = structuredOutputMode ?? this.config.structuredOutputMode ?? 'strict';
+
+    // Tool-synthesis providers handle any output kind by injecting a synthetic
+    // tool — they don't need native responseFormat support.
+    if (
+      strategy === 'tool-synthesis' ||
+      (!supported.includes(responseFormat.type) && info.supportsToolUse)
+    ) {
+      if (effectiveToolChoice && mode === 'strict') {
+        throw new AgentError(
+          `Provider '${provider.providerId}' emulates structured output via an internal tool, ` +
+            `which reserves toolChoice. Remove the toolChoice option for this run.`,
+          'INVALID_CONFIG'
+        );
+      }
+      return;
+    }
+
+    if (!supported.includes(responseFormat.type)) {
+      throw new AgentError(
+        `Provider '${provider.providerId}' / model '${targetModel}' does not support ` +
+          `responseFormat type '${responseFormat.type}' (Output.${output.kind}). ` +
+          `Supported: ${supported.length ? supported.join(', ') : 'none'}.`,
+        'INVALID_CONFIG'
+      );
+    }
   }
 
   /**
    * Build a complete AgentLoopConfig from the agent's config and per-call overrides.
-   * Centralizes all config assembly to prevent field omission bugs between
-   * runLoop() and doSend().
    */
   buildLoopConfig(overrides: {
     tools: SDKTool[];
@@ -71,10 +156,13 @@ export class AgentImpl implements Agent {
     signal: AbortSignal;
     emitEvent: (event: AgentEvent) => void;
     maxTurns?: number;
+    toolChoice?: ToolChoice;
+    structuredOutputMode?: StructuredOutputMode;
+    output?: OutputDefinition<any, any, any>;
     cwd?: string;
     sessionId?: string;
     compactThreshold?: number;
-    sessionState?: import('../tools/types.js').AgentSessionState;
+    sessionState?: AgentSessionState;
     readFileState?: Map<string, import('../tools/types.js').ReadFileStateEntry>;
     onCwdChange?: (newCwd: string) => void;
   }): AgentLoopConfig {
@@ -87,6 +175,11 @@ export class AgentImpl implements Agent {
       maxTokens: this.config.maxTokens,
       maxOutputTokens: this.config.maxOutputTokens,
       temperature: this.config.temperature,
+      toolChoice: overrides.toolChoice ?? this.config.toolChoice,
+      structuredOutputMode:
+        overrides.structuredOutputMode ?? this.config.structuredOutputMode ?? 'strict',
+      output: overrides.output,
+      maxStructuredOutputRepairs: this.config.maxStructuredOutputRepairs,
       permissionMode: this.config.permissionMode ?? 'default',
       permissionHandler: this.config.permissionHandler,
       permissionRules: this.config.permissionRules,
@@ -113,21 +206,37 @@ export class AgentImpl implements Agent {
     };
   }
 
-  async run(prompt: string, options?: RunOptions): Promise<AgentResult> {
+  // -------------------------------------------------------------------------
+  // run() — overloaded
+  // -------------------------------------------------------------------------
+
+  run(prompt: string, options?: RunOptions): Promise<AgentResult>;
+  run<TOutput extends OutputDefinition<any, any, any>>(
+    prompt: string,
+    options: RunOptions & { output: TOutput }
+  ): Promise<StructuredAgentResult<InferOutputResult<TOutput>>>;
+  async run(
+    prompt: string,
+    options?: RunOptions & { output?: OutputDefinition<any, any, any> }
+  ): Promise<AgentResult | StructuredAgentResult<unknown>> {
+    if (options?.output) {
+      return this.runStructured(
+        prompt,
+        options as RunOptions & { output: OutputDefinition<any, any, any> }
+      );
+    }
+    return this.runText(prompt, options);
+  }
+
+  private async runText(prompt: string, options?: RunOptions): Promise<AgentResult> {
     const collectedErrors: Array<{ type: string; message: string; turnNumber?: number }> = [];
     let finalUsage = emptyUsage();
     let turns = 0;
     let finalStopReason = 'end_turn';
     let currentTurn = 0;
-
-    // Track only the last turn's text/thinking for AgentResult
     let lastTurnTexts: string[] = [];
     let lastTurnThinking: AgentResultContent[] = [];
-
-    // Track the last assistant message for finalAssistantMessage
     let finalAssistantMessage: ProviderMessage | undefined;
-
-    // Shared messages array — agentLoop mutates it in-place
     const messages: ProviderMessage[] = [createUserMessage(prompt)];
 
     for await (const event of this.runLoop(messages, options)) {
@@ -138,15 +247,11 @@ export class AgentImpl implements Agent {
         lastTurnTexts = [];
         lastTurnThinking = [];
       }
-      if (event.type === 'text') {
-        lastTurnTexts.push(event.text);
-      }
+      if (event.type === 'text') lastTurnTexts.push(event.text);
       if (event.type === 'thinking') {
         lastTurnThinking.push({ type: 'thinking', thinking: event.thinking });
       }
-      if (event.type === 'usage') {
-        finalUsage = event.usage;
-      }
+      if (event.type === 'usage') finalUsage = event.usage;
       if (event.type === 'error') {
         collectedErrors.push({
           type: event.error instanceof Error ? event.error.constructor.name : 'Error',
@@ -158,7 +263,6 @@ export class AgentImpl implements Agent {
         turns++;
         finalStopReason = event.stopReason;
         finalUsage = event.usage;
-        // Capture the last assistant message from the messages array
         for (let i = messages.length - 1; i >= 0; i--) {
           if (messages[i]?.role === 'assistant') {
             finalAssistantMessage = messages[i];
@@ -168,12 +272,9 @@ export class AgentImpl implements Agent {
       }
     }
 
-    // Build result content from last turn only
     const text = lastTurnTexts.join('');
     const content: AgentResultContent[] = [...lastTurnThinking];
-    if (text) {
-      content.push({ type: 'text', text });
-    }
+    if (text) content.push({ type: 'text', text });
 
     return {
       text,
@@ -192,14 +293,350 @@ export class AgentImpl implements Agent {
     };
   }
 
-  async *stream(prompt: string, options?: RunOptions): AsyncGenerator<AgentEvent> {
-    const messages: ProviderMessage[] = [createUserMessage(prompt)];
+  private async runStructured(
+    prompt: string,
+    options: RunOptions & { output: OutputDefinition<any, any, any> }
+  ): Promise<StructuredAgentResult<unknown>> {
+    this.validateOutputConfig(
+      options.output,
+      options.toolChoice,
+      undefined,
+      options.structuredOutputMode
+    );
+    const stream = this.streamStructuredInternal(prompt, options);
 
+    // Drain agent events into onEvent callback (best-effort) and collect a
+    // text-mode-equivalent transcript for the final result.
+    const collectedErrors: Array<{ type: string; message: string; turnNumber?: number }> = [];
+    let turns = 0;
+    let finalStopReason = 'end_turn';
+    let currentTurn = 0;
+    let finalAssistantMessage: ProviderMessage | undefined;
+    let lastTurnTexts: string[] = [];
+    let lastTurnThinking: AgentResultContent[] = [];
+
+    const drainEvents = (async () => {
+      for await (const event of stream.events) {
+        this.config.onEvent?.(event);
+        if (event.type === 'turn_start') {
+          currentTurn = event.turnNumber;
+          lastTurnTexts = [];
+          lastTurnThinking = [];
+        }
+        if (event.type === 'text') lastTurnTexts.push(event.text);
+        if (event.type === 'thinking') {
+          lastTurnThinking.push({ type: 'thinking', thinking: event.thinking });
+        }
+        if (event.type === 'error') {
+          collectedErrors.push({
+            type: event.error instanceof Error ? event.error.constructor.name : 'Error',
+            message: event.error instanceof Error ? event.error.message : String(event.error),
+            turnNumber: currentTurn,
+          });
+        }
+        if (event.type === 'turn_end') {
+          turns++;
+          finalStopReason = event.stopReason;
+        }
+      }
+    })();
+
+    let output: unknown;
+    let finalUsage: Usage = emptyUsage();
+    try {
+      [output, finalUsage] = await Promise.all([stream.output, stream.usage]);
+    } finally {
+      await drainEvents;
+    }
+
+    // Recover finalAssistantMessage from the final messages array via events
+    // is awkward, so reach into the messages buffer instead.
+    const messagesBuf = stream.messages;
+    for (let i = messagesBuf.length - 1; i >= 0; i--) {
+      if (messagesBuf[i]?.role === 'assistant') {
+        finalAssistantMessage = messagesBuf[i];
+        break;
+      }
+    }
+
+    const text = await stream.text;
+    const content: AgentResultContent[] = [...lastTurnThinking];
+    if (text) content.push({ type: 'text', text });
+
+    return {
+      text,
+      content,
+      finalAssistantMessage: finalAssistantMessage
+        ? {
+            role: finalAssistantMessage.role,
+            content: convertProviderContentBlocks(finalAssistantMessage.content),
+          }
+        : undefined,
+      usage: finalUsage,
+      turns,
+      stopReason: finalStopReason,
+      messages: convertProviderMessages(messagesBuf),
+      errors: collectedErrors.length > 0 ? collectedErrors : undefined,
+      output,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // stream() — overloaded
+  // -------------------------------------------------------------------------
+
+  stream(prompt: string, options?: RunOptions): AsyncGenerator<AgentEvent>;
+  stream<TOutput extends OutputDefinition<any, any, any>>(
+    prompt: string,
+    options: RunOptions & { output: TOutput }
+  ): StreamOutputResult<
+    InferOutputPartial<TOutput>,
+    InferOutputResult<TOutput>,
+    InferOutputElement<TOutput>
+  >;
+  stream(
+    prompt: string,
+    options?: RunOptions & { output?: OutputDefinition<any, any, any> }
+  ): AsyncGenerator<AgentEvent> | StreamOutputResult<unknown, unknown, unknown> {
+    if (options?.output) {
+      return this.streamStructuredInternal(
+        prompt,
+        options as RunOptions & {
+          output: OutputDefinition<any, any, any>;
+        }
+      );
+    }
+    return this.streamEvents(prompt, options);
+  }
+
+  private async *streamEvents(prompt: string, options?: RunOptions): AsyncGenerator<AgentEvent> {
+    const messages: ProviderMessage[] = [createUserMessage(prompt)];
     for await (const event of this.runLoop(messages, options)) {
       this.config.onEvent?.(event);
       yield event;
     }
   }
+
+  private streamStructuredInternal(
+    prompt: string,
+    options: RunOptions & { output: OutputDefinition<any, any, any> }
+  ): StreamOutputResult<unknown, unknown, unknown> & { messages: ProviderMessage[] } {
+    this.validateOutputConfig(
+      options.output,
+      options.toolChoice,
+      undefined,
+      options.structuredOutputMode
+    );
+    const output = options.output;
+
+    const messages: ProviderMessage[] = [createUserMessage(prompt)];
+    const eventsQueue = new AsyncQueue<AgentEvent>();
+    const textQueue = new AsyncQueue<string>();
+    const partialQueue = new AsyncQueue<unknown>();
+    const elementQueue = new AsyncQueue<unknown>();
+    const fullQueue = new AsyncQueue<OutputStreamEvent<unknown, unknown>>();
+
+    let resolveOutput!: (value: unknown) => void;
+    let rejectOutput!: (error: Error) => void;
+    const outputPromise = new Promise<unknown>((resolve, reject) => {
+      resolveOutput = resolve;
+      rejectOutput = reject;
+    });
+    // Suppress unhandled-rejection if the consumer iterates only the streams
+    // and never awaits `output`. Real consumers awaiting `output` still see
+    // the rejection because `.catch` returns a new promise.
+    outputPromise.catch(() => {});
+    let resolveText!: (value: string) => void;
+    const textPromise = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    let resolveUsage!: (value: Usage) => void;
+    const usagePromise = new Promise<Usage>((resolve) => {
+      resolveUsage = resolve;
+    });
+
+    let accumulatedText = '';
+    let accumulatedJson = '';
+    let lastPartialSnapshot: string | undefined;
+    let lastElementCount = 0;
+    let syntheticToolResult: unknown;
+    let syntheticToolCaptured = false;
+    let finalUsage: Usage = emptyUsage();
+    let finishReason: string | undefined;
+
+    const resetTurnAccumulators = () => {
+      accumulatedText = '';
+      accumulatedJson = '';
+      lastPartialSnapshot = undefined;
+      lastElementCount = 0;
+      syntheticToolResult = undefined;
+      syntheticToolCaptured = false;
+      finishReason = undefined;
+    };
+
+    const emitPartialFromText = (source: string) => {
+      try {
+        const parsed = output.parsePartial(source);
+        if (parsed.partial !== undefined) {
+          const snapshot = stableStringify(parsed.partial);
+          if (snapshot !== lastPartialSnapshot) {
+            lastPartialSnapshot = snapshot;
+            partialQueue.push(parsed.partial);
+            fullQueue.push({ type: 'object', object: parsed.partial });
+          }
+        }
+        if (parsed.elements && parsed.elements.length > lastElementCount) {
+          for (let i = lastElementCount; i < parsed.elements.length; i++) {
+            const element = parsed.elements[i];
+            elementQueue.push(element);
+            fullQueue.push({ type: 'element', element });
+          }
+          lastElementCount = parsed.elements.length;
+        }
+      } catch {
+        // partial parse errors are non-fatal during streaming
+      }
+    };
+
+    const drive = (async () => {
+      try {
+        for await (const event of this.runLoop(messages, options)) {
+          this.config.onEvent?.(event);
+          eventsQueue.push(event);
+
+          if (event.type === 'turn_start') {
+            resetTurnAccumulators();
+          } else if (event.type === 'text') {
+            accumulatedText += event.text;
+            textQueue.push(event.text);
+            fullQueue.push({ type: 'text-delta', textDelta: event.text });
+            emitPartialFromText(accumulatedText);
+          } else if (
+            event.type === 'tool_use_delta' &&
+            isSyntheticStructuredOutputTool(event.toolName)
+          ) {
+            accumulatedJson = event.accumulatedJson;
+            textQueue.push(event.partialJson);
+            fullQueue.push({ type: 'text-delta', textDelta: event.partialJson });
+            emitPartialFromText(accumulatedJson);
+          } else if (
+            event.type === 'tool_use_end' &&
+            isSyntheticStructuredOutputTool(event.toolName) &&
+            !event.isError
+          ) {
+            syntheticToolResult = event.result;
+            syntheticToolCaptured = true;
+          } else if (event.type === 'usage') {
+            finalUsage = event.usage;
+          } else if (event.type === 'turn_end') {
+            finishReason = event.stopReason;
+            finalUsage = event.usage;
+          }
+        }
+
+        // Resolve the final structured value. Tool-synthesis path: use the
+        // captured tool result (already validated by OutputDefinition.validate).
+        // Native path: parseFinal on accumulated text.
+        let finalValue: unknown;
+        if (syntheticToolCaptured) {
+          finalValue = syntheticToolResult;
+          // Surface the canonical text representation for downstream consumers.
+          resolveText(JSON.stringify(syntheticToolResult));
+        } else {
+          if (!accumulatedText.trim()) {
+            throw new StructuredOutputError(
+              'Model returned no text — cannot parse structured output.',
+              'no_output',
+              {
+                kind: output.kind,
+                finishReason,
+                usage: finalUsage,
+              }
+            );
+          }
+          try {
+            finalValue = output.parseFinal(accumulatedText, { finishReason });
+          } catch (cause) {
+            const isJsonError = cause instanceof SyntaxError;
+            throw new StructuredOutputError(
+              `Failed to parse structured output: ${
+                cause instanceof Error ? cause.message : String(cause)
+              }`,
+              isJsonError ? 'parse_failed' : 'schema_mismatch',
+              {
+                kind: output.kind,
+                rawText: accumulatedText,
+                finishReason,
+                usage: finalUsage,
+              },
+              cause instanceof Error ? cause : undefined
+            );
+          }
+          resolveText(accumulatedText);
+        }
+
+        if (
+          output.kind === 'array' &&
+          Array.isArray(finalValue) &&
+          finalValue.length > lastElementCount
+        ) {
+          for (let i = lastElementCount; i < finalValue.length; i++) {
+            const element = finalValue[i];
+            elementQueue.push(element);
+            fullQueue.push({ type: 'element', element });
+          }
+          lastElementCount = finalValue.length;
+        }
+
+        fullQueue.push({ type: 'finish' });
+        resolveOutput(finalValue);
+      } catch (cause) {
+        const error =
+          cause instanceof Error
+            ? cause
+            : new StructuredOutputError(String(cause), 'parse_failed', {
+                kind: output.kind,
+                rawText: accumulatedText || accumulatedJson,
+                finishReason,
+                usage: finalUsage,
+              });
+        fullQueue.push({ type: 'error', error });
+        rejectOutput(error);
+        // Resolve text/usage so consumers awaiting them don't hang.
+        resolveText(accumulatedText || accumulatedJson || '');
+        partialQueue.fail(error);
+        elementQueue.fail(error);
+        fullQueue.fail(error);
+      } finally {
+        resolveUsage(finalUsage);
+        eventsQueue.close();
+        textQueue.close();
+        partialQueue.close();
+        elementQueue.close();
+        fullQueue.close();
+      }
+    })();
+
+    // Surface unhandled rejections from the drive() promise so node doesn't
+    // log them when the consumer awaits `output` later.
+    drive.catch(() => {});
+
+    return {
+      events: eventsQueue,
+      textStream: textQueue,
+      partialOutputStream: partialQueue,
+      elementStream: elementQueue,
+      fullStream: fullQueue,
+      output: outputPromise,
+      text: textPromise,
+      usage: usagePromise,
+      messages,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // System prompt + MCP wiring
+  // -------------------------------------------------------------------------
 
   private async buildSystemPromptAsync(
     tools: SDKTool[],
@@ -210,20 +647,17 @@ export class AgentImpl implements Agent {
     const append = appendOverride ?? this.config.appendSystemPrompt ?? '';
 
     if (explicitBase !== undefined) {
-      // User provided an explicit system prompt — use as-is, with optional append
       return append ? `${explicitBase}\n\n${append}` : explicitBase;
     }
 
-    // No explicit prompt — build from instruction files and tool descriptions
     const cwd = this.config.cwd ?? process.cwd();
     let instructionContent: string | undefined;
 
-    // Only load instruction files if explicitly opted in (SDK safety default)
     if (this.config.loadInstructionFiles) {
       try {
         instructionContent = (await loadInstructionFiles({ projectRoot: cwd })) || undefined;
       } catch {
-        // Instruction file loading is non-fatal
+        // non-fatal
       }
     }
 
@@ -232,7 +666,7 @@ export class AgentImpl implements Agent {
       try {
         memoryContent = (await loadMemoryFiles(this.config.memoryDir)) || undefined;
       } catch {
-        // Memory file loading is non-fatal
+        // non-fatal
       }
     }
 
@@ -242,32 +676,21 @@ export class AgentImpl implements Agent {
       memoryContent,
     });
 
-    if (append) {
-      builtPrompt = `${builtPrompt}\n\n${append}`;
-    }
-
+    if (append) builtPrompt = `${builtPrompt}\n\n${append}`;
     return builtPrompt;
   }
 
-  /**
-   * Connect to configured MCP servers. Retries previously failed servers
-   * up to MAX_MCP_RETRIES times. Emits error events for failures.
-   */
   private async connectMCPServers(): Promise<SDKTool[]> {
     if (!this.config.mcpServers?.length) return this.mcpTools;
 
-    if (!this.mcpClient) {
-      this.mcpClient = new MCPClient();
-    }
+    if (!this.mcpClient) this.mcpClient = new MCPClient();
 
-    // Determine which servers need connection attempts
     const connections: MCPConnection[] = this.mcpClient.getConnections?.() ?? [];
     const connectedNames = new Set(
       connections.filter((c) => c.status === 'connected').map((c) => c.name)
     );
 
     const serversToConnect = this.config.mcpServers.filter((sc) => {
-      // Use normalized name for consistent comparison with MCPClient internals
       const name = normalizeServerName(sc.name);
       if (connectedNames.has(name)) return false;
       const retries = this.mcpRetryCount.get(name) ?? 0;
@@ -281,7 +704,6 @@ export class AgentImpl implements Agent {
           try {
             this.config.logger?.info('MCP connecting', { server: serverConfig.name });
             await this.mcpClient!.connect(serverConfig);
-            // Clear retry count on success
             this.mcpRetryCount.delete(normalizedName);
           } catch (err) {
             const retries = (this.mcpRetryCount.get(normalizedName) ?? 0) + 1;
@@ -295,7 +717,6 @@ export class AgentImpl implements Agent {
         })
       );
 
-      // Emit error events for failed connections
       for (const result of results) {
         if (result.status === 'rejected') {
           this.config.onEvent?.({
@@ -313,7 +734,7 @@ export class AgentImpl implements Agent {
 
   private async *runLoop(
     messages: ProviderMessage[],
-    options?: RunOptions
+    options?: RunOptions & { output?: OutputDefinition<any, any, any> }
   ): AsyncGenerator<AgentEvent> {
     if (this.isRunning) {
       throw new AgentError(
@@ -329,14 +750,11 @@ export class AgentImpl implements Agent {
         options?.signal
       );
 
-      // Auto-connect MCP servers (1.3)
       const mcpTools = await this.connectMCPServers();
-
-      // Merge user tools + MCP tools
       const userTools = options?.tools ?? this.config.tools ?? [];
       const allTools = mcpTools.length > 0 ? [...userTools, ...mcpTools] : userTools;
+      this.validateToolChoiceConfig(options?.toolChoice);
 
-      // Build system prompt (async — loads instruction files if no explicit prompt)
       const systemPrompt = await this.buildSystemPromptAsync(
         allTools,
         options?.systemPrompt,
@@ -344,18 +762,17 @@ export class AgentImpl implements Agent {
       );
 
       const sideChannel = new AsyncQueue<AgentEvent>();
-
       const loopConfig = this.buildLoopConfig({
         tools: allTools,
         systemPrompt,
         signal: linkedController.signal,
         maxTurns: options?.maxTurns,
-        emitEvent: (event) => {
-          sideChannel.push(event);
-        },
+        toolChoice: options?.toolChoice,
+        structuredOutputMode: options?.structuredOutputMode,
+        output: options?.output,
+        emitEvent: (event) => sideChannel.push(event),
       });
 
-      // Use an async wrapper that closes sideChannel when the loop finishes
       const loopWithCleanup = async function* () {
         try {
           yield* agentLoop(messages, loopConfig);
@@ -370,10 +787,6 @@ export class AgentImpl implements Agent {
     }
   }
 
-  /**
-   * Build system prompt for session usage (delegates to buildSystemPromptAsync).
-   * Public so that AgentSessionImpl can access it.
-   */
   buildSystemPromptForSession(
     tools: SDKTool[],
     override?: string,
@@ -405,17 +818,14 @@ export class AgentImpl implements Agent {
     await this.closeMCP();
   }
 
-  /** Get MCP tools (for session sharing) */
   getMCPTools(): SDKTool[] {
     return this.mcpTools;
   }
 
-  /** Connect MCP (for session usage) */
   ensureMCPConnected(): Promise<SDKTool[]> {
     return this.connectMCPServers();
   }
 
-  /** Disconnect all MCP servers */
   async closeMCP(): Promise<void> {
     if (this.mcpClient) {
       await this.mcpClient.close();
@@ -431,20 +841,24 @@ export class AgentImpl implements Agent {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a single ProviderContentBlock to AgentResultContent.
- * Unlike the old version, this preserves all block types including image/document.
+ * Stable JSON stringify used for partial-output dedup. Sorts object keys so
+ * the same logical value always produces the same string regardless of insert
+ * order — prevents spurious partial emissions on key reordering.
  */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
 function convertSingleBlock(b: ProviderContentBlock): AgentResultContent {
   switch (b.type) {
     case 'text':
       return { type: 'text', text: b.text };
     case 'tool_use':
-      return {
-        type: 'tool_use',
-        id: b.id,
-        name: b.name,
-        input: b.input,
-      };
+      return { type: 'tool_use', id: b.id, name: b.name, input: b.input };
     case 'tool_result':
       return {
         type: 'tool_result',
@@ -459,7 +873,6 @@ function convertSingleBlock(b: ProviderContentBlock): AgentResultContent {
     case 'document':
       return { type: 'document', source: b.source };
     default:
-      // For any unknown block types, serialize as text rather than returning empty string
       return { type: 'text', text: JSON.stringify(b) };
   }
 }
@@ -489,12 +902,10 @@ class AgentSessionImpl implements AgentSession {
   private abortController = new AbortController();
   private createdAt: number;
 
-  // Session-scoped state that persists across send() calls
   private sessionState: AgentSessionState = {};
   private readFileState = new Map<string, import('../tools/types.js').ReadFileStateEntry>();
   private currentCwd: string;
 
-  // Serialization lock — ensures only one send() runs at a time
   private sendLock: Promise<void> = Promise.resolve();
 
   constructor(config: AgentConfig, agentImpl: AgentImpl, options?: SessionOptions) {
@@ -505,14 +916,9 @@ class AgentSessionImpl implements AgentSession {
     this.createdAt = Date.now();
     this.currentCwd = config.cwd ?? process.cwd();
 
-    if (options?.initialMessages) {
-      this.messages = [...options.initialMessages];
-    }
+    if (options?.initialMessages) this.messages = [...options.initialMessages];
   }
 
-  /**
-   * Restore a session from the session store.
-   */
   static async fromStore(
     config: AgentConfig,
     agentImpl: AgentImpl,
@@ -521,35 +927,27 @@ class AgentSessionImpl implements AgentSession {
     options?: SessionOptions
   ): Promise<AgentSessionImpl> {
     const data = await store.load(resumeId);
-    const session = new AgentSessionImpl(config, agentImpl, {
-      ...options,
-      id: resumeId,
-    });
+    const session = new AgentSessionImpl(config, agentImpl, { ...options, id: resumeId });
 
     if (data) {
       session.messages = data.messages;
       session.cumulativeUsage = data.usage;
       session.createdAt = data.createdAt;
-      // Restore session-scoped state
       if (data.metadata?.sessionState) {
         session.sessionState = data.metadata.sessionState as AgentSessionState;
       }
       if (data.metadata?.lastCwd && typeof data.metadata.lastCwd === 'string') {
         session.currentCwd = data.metadata.lastCwd;
       }
-      // Restore background task state (status/output only — running tasks become 'stopped')
       if (data.metadata?.backgroundTasks && Array.isArray(data.metadata.backgroundTasks)) {
         const bgManager = BackgroundTaskManager.fromSerializable(
           data.metadata.backgroundTasks as SerializableTaskState[]
         );
         session.sessionState[BG_MANAGER_KEY] = bgManager;
       }
-      // Restore readFileState for read-before-write safety
       if (data.metadata?.readFileState && Array.isArray(data.metadata.readFileState)) {
         for (const [path, entry] of data.metadata.readFileState as Array<[string, any]>) {
-          if (typeof path === 'string' && entry) {
-            session.readFileState.set(path, entry);
-          }
+          if (typeof path === 'string' && entry) session.readFileState.set(path, entry);
         }
       }
     }
@@ -558,14 +956,11 @@ class AgentSessionImpl implements AgentSession {
   }
 
   async *send(prompt: string): AsyncGenerator<AgentEvent> {
-    // Serialize concurrent send() calls via Promise chain lock.
-    // Each send() waits for the previous one to fully complete before starting.
     let releaseLock!: () => void;
     const prevLock = this.sendLock;
     this.sendLock = new Promise<void>((resolve) => {
       releaseLock = resolve;
     });
-
     await prevLock;
 
     try {
@@ -578,7 +973,6 @@ class AgentSessionImpl implements AgentSession {
   private async *doSend(prompt: string): AsyncGenerator<AgentEvent> {
     this.messages.push(createUserMessage(prompt));
 
-    // Build system prompt using agent's full builder (includes instruction files + tool descriptions)
     const mcpTools = await this.agentImpl.ensureMCPConnected();
     const userTools = this.config.tools ?? [];
     const allTools = mcpTools.length > 0 ? [...userTools, ...mcpTools] : userTools;
@@ -590,7 +984,6 @@ class AgentSessionImpl implements AgentSession {
     );
 
     const sideChannel = new AsyncQueue<AgentEvent>();
-
     const loopConfig = this.agentImpl.buildLoopConfig({
       tools: allTools,
       systemPrompt,
@@ -598,9 +991,7 @@ class AgentSessionImpl implements AgentSession {
       cwd: this.currentCwd,
       sessionId: this.id,
       compactThreshold: this.sessionOptions?.compactThreshold,
-      emitEvent: (event) => {
-        sideChannel.push(event);
-      },
+      emitEvent: (event) => sideChannel.push(event),
       sessionState: this.sessionState,
       readFileState: this.readFileState,
       onCwdChange: (newCwd) => {
@@ -619,23 +1010,17 @@ class AgentSessionImpl implements AgentSession {
 
     try {
       for await (const event of merge([loopWithCleanup(), sideChannel])) {
-        if (event.type === 'usage') {
-          this.cumulativeUsage = event.usage;
-        }
+        if (event.type === 'usage') this.cumulativeUsage = event.usage;
         this.config.onEvent?.(event);
         yield event;
       }
     } finally {
-      // Persist session regardless of success or failure — this ensures that
-      // partial transcripts, user messages, and accumulated usage are never lost.
       if (this.config.sessionStore) {
         try {
-          // Serialize background task state so it survives session restore
           const bgManager = this.sessionState[BG_MANAGER_KEY];
           const bgTaskStates =
             bgManager instanceof BackgroundTaskManager ? bgManager.toSerializable() : undefined;
 
-          // Serialize readFileState for read-before-write safety across session restores
           const readFileEntries = Array.from(this.readFileState.entries()).map(
             ([path, entry]) => [path, { ...entry }] as const
           );
@@ -654,7 +1039,6 @@ class AgentSessionImpl implements AgentSession {
             updatedAt: Date.now(),
           });
         } catch (err) {
-          // Session persistence failure is non-fatal but should be observable
           this.config.onEvent?.({
             type: 'error',
             error: new Error(
@@ -679,17 +1063,11 @@ class AgentSessionImpl implements AgentSession {
   }
 
   async compact(): Promise<string> {
-    if (this.messages.length <= 2) {
-      return 'Nothing to compact';
-    }
+    if (this.messages.length <= 2) return 'Nothing to compact';
 
-    // First try micro-compact
     const { messages: microCompacted, freedTokens } = microCompact(this.messages);
-    if (freedTokens > 0) {
-      this.messages = microCompacted;
-    }
+    if (freedTokens > 0) this.messages = microCompacted;
 
-    // Then do full compaction via API
     try {
       const { messages: compacted, summary } = await compactMessages(this.messages, {
         provider: this.config.provider,
@@ -699,10 +1077,7 @@ class AgentSessionImpl implements AgentSession {
           : 100_000,
       });
       this.messages = compacted;
-
-      // Clear readFileState after compaction since old entries may reference removed messages
       this.readFileState.clear();
-
       return summary || `Compacted to ${this.messages.length} messages`;
     } catch {
       return freedTokens > 0
@@ -721,3 +1096,6 @@ class AgentSessionImpl implements AgentSession {
     this.messages = [];
   }
 }
+
+// addUsage retained for callers — silence unused-import warnings.
+void addUsage;

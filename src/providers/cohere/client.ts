@@ -26,7 +26,7 @@ export class CohereProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getCohereModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getCohereModelInfo(modelId));
   }
 }
 

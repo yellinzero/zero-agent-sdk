@@ -26,7 +26,7 @@ export class MistralProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getMistralModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getMistralModelInfo(modelId));
   }
 }
 

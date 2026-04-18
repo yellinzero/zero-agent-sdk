@@ -15,6 +15,7 @@ import type {
   ProviderUsage,
   StreamMessageParams,
   SystemPromptBlock,
+  ToolChoice,
 } from '../types.js';
 import { getBedrockModelInfo } from './models.js';
 
@@ -77,7 +78,13 @@ export class BedrockProvider implements ModelProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getBedrockModelInfo(modelId);
+    const info = getBedrockModelInfo(modelId);
+    return {
+      ...info,
+      supportsToolChoice: info.supportsToolChoice ?? true,
+      supportsResponseFormat: info.supportsResponseFormat ?? ['text'],
+      responseFormatStrategy: info.responseFormatStrategy ?? 'tool-synthesis',
+    };
   }
 
   async *streamMessage(params: StreamMessageParams): AsyncGenerator<ProviderStreamEvent> {
@@ -236,9 +243,9 @@ export class BedrockProvider implements ModelProvider {
       }
     }
 
-    // Tools
+    // Tools + toolChoice.
     if (params.tools && params.tools.length > 0) {
-      request.toolConfig = {
+      const toolConfig: Record<string, unknown> = {
         tools: params.tools.map((t) => ({
           toolSpec: {
             name: t.name,
@@ -247,6 +254,9 @@ export class BedrockProvider implements ModelProvider {
           },
         })),
       };
+      const tc = this.mapToolChoice(params.toolChoice);
+      if (tc !== undefined) toolConfig.toolChoice = tc;
+      request.toolConfig = toolConfig;
     }
 
     // Inference config
@@ -274,6 +284,21 @@ export class BedrockProvider implements ModelProvider {
     request.inferenceConfig = inferenceConfig;
 
     return request;
+  }
+
+  private mapToolChoice(choice: ToolChoice | undefined): Record<string, unknown> | undefined {
+    if (!choice) return undefined;
+    switch (choice.type) {
+      case 'auto':
+        return { auto: {} };
+      case 'any':
+        return { any: {} };
+      case 'tool':
+        return { tool: { name: choice.name } };
+      case 'none':
+        // Converse has no 'none'; caller should drop tools entirely. Skip here.
+        return undefined;
+    }
   }
 
   // ---------------------------------------------------------------------------

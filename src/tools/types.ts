@@ -180,6 +180,7 @@ export function pruneReadFileState(state: Map<string, ReadFileStateEntry>): void
 
 export interface SDKToolResult<T = unknown> {
   data: T;
+  metadata?: Record<string, unknown>;
   /** Additional messages to inject into conversation */
   newMessages?: ToolContextMessage[];
   /** Modify execution context after this tool runs (only for non-concurrent tools) */

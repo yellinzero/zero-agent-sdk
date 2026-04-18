@@ -10,6 +10,7 @@ export const FIREWORKS_MODELS: Record<string, ModelInfo> = {
     maxOutputTokens: 4_096,
     supportsThinking: false,
     supportsToolUse: true,
+    supportsResponseFormat: ['text', 'json_object'],
     supportsImages: false,
     supportsPdfInput: false,
     inputTokenCostPer1M: 3,
@@ -20,6 +21,7 @@ export const FIREWORKS_MODELS: Record<string, ModelInfo> = {
     maxOutputTokens: 4_096,
     supportsThinking: false,
     supportsToolUse: true,
+    supportsResponseFormat: ['text', 'json_object'],
     supportsImages: false,
     supportsPdfInput: false,
     inputTokenCostPer1M: 0.9,
@@ -32,6 +34,7 @@ const DEFAULT_MODEL_INFO: ModelInfo = {
   maxOutputTokens: 4_096,
   supportsThinking: false,
   supportsToolUse: true,
+  supportsResponseFormat: ['text', 'json_object'],
   supportsImages: false,
   supportsPdfInput: false,
 };

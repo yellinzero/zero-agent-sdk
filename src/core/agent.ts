@@ -1,19 +1,26 @@
 /**
  * Agent — the main public API for creating and running agents.
  */
-
 import type { HookConfig } from '../hooks/types.js';
 import type { MCPServerConfig } from '../mcp/types.js';
 import type { DenialLimits } from '../permissions/rules.js';
 import type { PermissionHandler, PermissionMode, PermissionRule } from '../permissions/types.js';
-import type { ModelProvider } from '../providers/types.js';
+import type { ModelProvider, ToolChoice } from '../providers/types.js';
 import type { SDKTool } from '../tools/types.js';
 import type { Tracer } from '../tracing/tracer.js';
 import { AgentError } from './errors.js';
 import type { AgentEvent } from './events.js';
+import type {
+  InferOutputElement,
+  InferOutputPartial,
+  InferOutputResult,
+  OutputDefinition,
+} from './output.js';
 import type { AgentSession, SessionOptions } from './session.js';
 import type { SessionStore } from './store.js';
-import type { Logger, ThinkingConfig, Usage } from './types.js';
+import type { DeepPartial, Logger, ThinkingConfig, Usage } from './types.js';
+
+export type StructuredOutputMode = 'strict' | 'mixed';
 
 // ---------------------------------------------------------------------------
 // Agent Config
@@ -80,6 +87,12 @@ export interface AgentConfig {
   /** Maximum output tokens per response */
   maxOutputTokens?: number;
 
+  /**
+   * Constrain how the model uses the provided tools.
+   * See `StreamMessageParams.toolChoice` for semantics and the provider support matrix.
+   */
+  toolChoice?: ToolChoice;
+
   /** Context window size in tokens (enables auto-compaction when set) */
   contextWindow?: number;
 
@@ -130,6 +143,26 @@ export interface AgentConfig {
    * retries, compaction, permission checks, MCP connections, etc.
    */
   logger?: Logger;
+
+  /**
+   * Maximum number of structured-output repair attempts before failing the run.
+   *
+   * Only applies when the provider uses tool-synthesis to satisfy a structured
+   * output (e.g. Anthropic, Bedrock). A repair attempt is consumed each time
+   * the model invokes the synthetic structured-output tool with input that
+   * fails schema validation. Default: 2.
+   */
+  maxStructuredOutputRepairs?: number;
+
+  /**
+   * How tool-synthesis structured output coexists with normal tools.
+   * - `strict`: reserve tool choice for the internal structured-output tool
+   * - `mixed`: allow normal tools first, then require the internal tool once
+   *   for the final structured answer
+   *
+   * Default: `strict`
+   */
+  structuredOutputMode?: StructuredOutputMode;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,11 +182,49 @@ export interface UsageCallbackEvent {
 // ---------------------------------------------------------------------------
 
 export interface Agent {
-  /** Execute a single prompt and return the final result */
+  /**
+   * Execute a single prompt and return the final result.
+   *
+   * Pass `output` to receive a typed, validated structured result alongside
+   * the usual transcript fields:
+   *
+   * ```ts
+   * const r = await agent.run('extract', {
+   *   output: Output.object({ schema: z.object({ name: z.string() }) }),
+   * });
+   * r.output.name; // typed
+   * ```
+   */
   run(prompt: string, options?: RunOptions): Promise<AgentResult>;
+  run<TOutput extends OutputDefinition<any, any, any>>(
+    prompt: string,
+    options: RunOptions & { output: TOutput }
+  ): Promise<StructuredAgentResult<InferOutputResult<TOutput>>>;
 
-  /** Execute a prompt with streaming events */
+  /**
+   * Execute a prompt with streaming events.
+   *
+   * Pass `output` to receive a structured stream handle exposing
+   * `partialOutputStream`, `elementStream` (array outputs only), and an
+   * `output` promise that resolves to the validated final value:
+   *
+   * ```ts
+   * const s = agent.stream('extract list', {
+   *   output: Output.array({ element: itemSchema }),
+   * });
+   * for await (const item of s.elementStream) { ... }
+   * await s.output;
+   * ```
+   */
   stream(prompt: string, options?: RunOptions): AsyncGenerator<AgentEvent>;
+  stream<TOutput extends OutputDefinition<any, any, any>>(
+    prompt: string,
+    options: RunOptions & { output: TOutput }
+  ): StreamOutputResult<
+    InferOutputPartial<TOutput>,
+    InferOutputResult<TOutput>,
+    InferOutputElement<TOutput>
+  >;
 
   /** Create a multi-turn session (async when resuming from store) */
   createSession(options?: SessionOptions): AgentSession | Promise<AgentSession>;
@@ -184,6 +255,12 @@ export interface RunOptions {
 
   /** Override tools for this run */
   tools?: SDKTool[];
+
+  /** Override tool choice for this run */
+  toolChoice?: ToolChoice;
+
+  /** Override structured-output tool orchestration mode for this run */
+  structuredOutputMode?: StructuredOutputMode;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +291,40 @@ export interface AgentResult {
 
   /** Non-fatal errors collected during execution */
   errors?: Array<{ type: string; message: string; turnNumber?: number }>;
+}
+
+export interface StructuredAgentResult<T> extends AgentResult {
+  /** Parsed and validated structured output produced by the run. */
+  output: T;
+}
+
+export type OutputStreamEvent<TPartial, TElement = never> =
+  | { type: 'text-delta'; textDelta: string }
+  | { type: 'object'; object: TPartial }
+  | { type: 'element'; element: TElement }
+  | { type: 'finish' }
+  | { type: 'error'; error: Error };
+
+export interface StreamOutputResult<TPartial, TFinal, TElement = never> {
+  /** Raw text deltas from the model (or JSON deltas from the synthetic tool). */
+  textStream: AsyncIterable<string>;
+  /** Best-effort partial parsed value, deduped on structural change. */
+  partialOutputStream: AsyncIterable<DeepPartial<TPartial>>;
+  /**
+   * Per-element stream for array outputs. Empty for non-array outputs.
+   * Yields each element as soon as it can be fully parsed and validated.
+   */
+  elementStream: AsyncIterable<TElement>;
+  /** Combined event stream (text deltas + partials + elements + finish/error). */
+  fullStream: AsyncIterable<OutputStreamEvent<DeepPartial<TPartial>, TElement>>;
+  /** Underlying agent events (tool calls, thinking, usage, etc.). */
+  events: AsyncIterable<AgentEvent>;
+  /** Resolves with the validated final structured value. */
+  output: Promise<TFinal>;
+  /** Resolves with the raw final text (or JSON.stringify(output) for synthesis). */
+  text: Promise<string>;
+  /** Resolves with the cumulative usage for the run. */
+  usage: Promise<Usage>;
 }
 
 export interface AgentResultMessage {

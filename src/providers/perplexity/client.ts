@@ -25,7 +25,7 @@ export class PerplexityProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getPerplexityModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getPerplexityModelInfo(modelId));
   }
 }
 

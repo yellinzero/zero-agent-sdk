@@ -25,7 +25,7 @@ export class CerebrasProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getCerebrasModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getCerebrasModelInfo(modelId));
   }
 }
 

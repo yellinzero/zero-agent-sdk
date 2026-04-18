@@ -62,7 +62,7 @@ export class GenericOpenAICompatibleProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return this._models[modelId] ?? this._defaultModelInfo;
+    return this.withStructuredOutputDefaults(this._models[modelId] ?? this._defaultModelInfo);
   }
 }
 

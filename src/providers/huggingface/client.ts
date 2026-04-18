@@ -25,7 +25,7 @@ export class HuggingFaceProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getHuggingFaceModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getHuggingFaceModelInfo(modelId));
   }
 }
 

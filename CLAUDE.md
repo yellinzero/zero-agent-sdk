@@ -24,12 +24,14 @@ src/
 │   ├── session.ts       # AgentSession 接口
 │   ├── types.ts         # Usage, ContentBlock, ThinkingConfig, Logger
 │   ├── events.ts        # AgentEvent 类型体系
-│   ├── errors.ts        # AgentError 及子类
+│   ├── errors.ts        # AgentError 及子类（含 StructuredOutputError）
+│   ├── output.ts        # Output.* 工厂 + OutputDefinition + formatZodError
 │   └── store.ts         # SessionStore, InMemorySessionStore, FileSessionStore
 │
 ├── loop/                # Agent 执行循环
 │   ├── agent-impl.ts    # AgentImpl 实现类 (run/stream/createSession)
-│   └── query.ts         # agentLoop() 核心循环
+│   ├── query.ts         # agentLoop() 核心循环
+│   └── schema-utils.ts  # zodToJsonSchema + provider dialect 归一化
 │
 ├── providers/           # Provider 适配层 (39 个)
 │   ├── types.ts         # ModelProvider, ProviderMessage, ProviderStreamEvent
@@ -51,6 +53,7 @@ src/
 │   ├── types.ts         # SDKTool, ToolExecutionContext, PermissionCheckResult
 │   ├── registry.ts      # ToolRegistry
 │   ├── orchestration.ts # runTools(), partitionToolCalls()
+│   ├── structured-output.ts # createStructuredOutputTool() + 内部 tool 常量
 │   ├── multimodal.ts    # imageGenerationTool, speechGenerationTool 等
 │   └── builtin/         # 21 个内置工具
 │       ├── index.ts     # builtinTools() 工厂
@@ -102,11 +105,16 @@ src/
 │   ├── async-queue.ts   # AsyncQueue
 │   ├── messages.ts      # createUserMessage(), extractText(), normalizeMessageOrder()
 │   ├── streaming.ts     # merge() 流合并
+│   ├── partial-json.ts  # parsePartialJson() 流式 JSON 修复
+│   ├── json-slice.ts    # findJsonSliceRange() 从混合文本切出 JSON
 │   └── tokens.ts        # estimateTokenCount(), addUsage()
 │
 ├── generate.ts          # 多模态直调 (generateImage, generateSpeech, transcribe, embed)
 ├── index.ts             # 主入口 (所有导出)
 └── __tests__/           # 24+ 测试文件
+    ├── live/            # 真 provider live 矩阵 (.live.test.ts)
+    ├── partial-json.test.ts
+    └── structured-output.test.ts
 ```
 
 ## 执行模型
@@ -140,12 +148,46 @@ createAgent(config)
 ```typescript
 interface Agent {
   run(prompt: string, options?: RunOptions): Promise<AgentResult>
+  run<T extends OutputDefinition>(prompt: string, options: RunOptions & { output: T }):
+    Promise<StructuredAgentResult<InferOutputResult<T>>>
   stream(prompt: string, options?: RunOptions): AsyncGenerator<AgentEvent>
+  stream<T extends OutputDefinition>(prompt: string, options: RunOptions & { output: T }):
+    StreamOutputResult<InferOutputPartial<T>, InferOutputResult<T>, InferOutputElement<T>>
   createSession(options?): AgentSession | Promise<AgentSession>
   abort(): void
   close(): Promise<void>
 }
 ```
+
+### Output (结构化输出)
+
+```typescript
+const Output = {
+  text(),                                              // 默认，纯文本
+  object({ schema, name?, description?, strict? }),    // Zod 强校验对象
+  array({ element, name?, description?, strict? }),    // 数组（含 elementStream）
+  enum({ options, name?, description? }),              // 限定枚举
+  json(),                                              // 任意 well-formed JSON
+}
+```
+
+`agent.run({ output })` 返回 `StructuredAgentResult<T>`，多一个 `output: T` 字段。
+`agent.stream({ output })` 返回 `StreamOutputResult`，含：
+
+| 字段 | 说明 |
+|------|------|
+| `events` | `AgentEvent` 流（与无 output 一致） |
+| `textStream` | 文本/JSON 字符串增量 |
+| `partialOutputStream` | 去重后的 partial 对象快照 |
+| `elementStream` | array 类型独有，已完成元素逐个吐出 |
+| `fullStream` | `text-delta` / `object` / `element` / `finish` / `error` 统一事件 |
+| `output` | 最终 Promise，throw `StructuredOutputError` |
+| `text` / `usage` | 同名 Promise |
+
+Provider 分流策略由 `ModelInfo.responseFormatStrategy` + `supportsResponseFormat` 决定：
+- `native`：OpenAI / Azure / Gemini / Vertex 直接走 `responseFormat`
+- `tool-synthesis`：Anthropic / Bedrock 注入合成 tool（占用 `toolChoice`）
+- 其余 OpenAI-compatible：按模型显式声明，未声明则走 synthesis
 
 ### AgentConfig 关键字段
 
@@ -167,6 +209,8 @@ interface Agent {
 | `compactThreshold` | `number` | 可选，压缩阈值 (默认 0.8) |
 | `thinkingConfig` | `ThinkingConfig` | 可选，扩展思考 |
 | `temperature` | `number` | 可选 |
+| `maxStructuredOutputRepairs` | `number` | 可选，synthesis 路径修复重试预算（默认 2） |
+| `toolChoice` | `ToolChoice` | 可选，与 `output` 在 synthesis provider 下互斥 |
 | `sessionStore` | `SessionStore` | 可选，会话存储 |
 | `memoryDir` | `string` | 可选，内存文件目录 |
 | `cwd` | `string` | 可选，工作目录 |
@@ -205,7 +249,9 @@ interface ModelProvider {
 
 ### 错误类族
 
-`AgentError` → `ProviderError` | `ToolExecutionError` | `PermissionDeniedError` | `BudgetExceededError` | `AbortError`
+`AgentError` → `ProviderError` | `ToolExecutionError` | `PermissionDeniedError` | `BudgetExceededError` | `AbortError` | `StructuredOutputError`
+
+`StructuredOutputError.reason`: `parse_failed` | `schema_mismatch` | `max_repairs` | `no_output`，附带 `rawText` / `kind` / `finishReason` / `usage` / `attempts` / `repairHistory`。
 
 ### 权限模式
 
@@ -290,6 +336,10 @@ pnpm lint && pnpm typecheck && pnpm test
 | delegateTool | 子 Agent 委托工具 |
 | retrieverTool | 检索器包装工具 |
 | Logger | 结构化日志接口 (`debug`/`info`/`warn`/`error`)，通过 `AgentConfig.logger` 注入 |
+| OutputDefinition | `Output.*` 工厂返回的结构化输出定义；包含 `responseFormat` / `parsePartial` / `parseFinal` / `validate` |
+| StructuredAgentResult | `agent.run({ output })` 的返回值，比 `AgentResult` 多 `output: T` |
+| StreamOutputResult | `agent.stream({ output })` 的返回值，含多路 stream + Promise |
+| Synthetic structured-output tool | 在 `tool-synthesis` provider 下注入的内部 tool，名为 `__zero_sdk_structured_output__`，校验失败计入 repair budget |
 
 ## 关键设计决策
 
@@ -302,3 +352,4 @@ pnpm lint && pnpm typecheck && pnpm test
 7. **安全默认值**: `loadInstructionFiles` 默认 `false`，防止服务端/多租户场景意外加载宿主文件系统内容。
 8. **Span 生命周期**: Tracer span 必须在 try/finally 中配对 `beginSpan`/`endSpan`，防止异常路径泄漏。
 9. **SSRF 防护**: `validateUrl()` 覆盖 IPv4-mapped IPv6 地址（`::ffff:127.0.0.1`）绕过检测。
+10. **结构化输出双路径**: native（provider 直接 `responseFormat`）vs tool-synthesis（注入合成 tool + 强制 `toolChoice`）。Synthesis 路径的修复预算 `maxStructuredOutputRepairs` 对**所有** `isError` 都计数（schema 校验失败、JSON 解析失败、input 校验失败均算），耗尽即抛 `StructuredOutputError(max_repairs)`，避免空转直到 `maxTurns`。

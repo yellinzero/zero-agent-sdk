@@ -28,6 +28,32 @@ export interface StreamMessageParams {
   messages: ProviderMessage[];
   systemPrompt: string | SystemPromptBlock[];
   tools?: ProviderToolSchema[];
+  /**
+   * Constrain how the model uses the provided tools.
+   * - `auto`: model decides whether to call a tool (default when omitted)
+   * - `any`: model MUST call one of the tools, its pick
+   * - `none`: model MUST NOT call any tool (provider will drop the tools array where no native equivalent exists, e.g. Anthropic)
+   * - `tool`: model MUST call the named tool
+   *
+   * Support matrix:
+   * - Anthropic: auto | any | none (drops tools) | tool
+   * - OpenAI-compatible: auto | any (→ required) | none | tool (→ function)
+   * - Providers without native support silently ignore this field.
+   */
+  toolChoice?: ToolChoice;
+  /**
+   * Constrain the format of the model's text output.
+   * - `text`: plain text (default when omitted)
+   * - `json_object`: output must be a syntactically valid JSON object (loose, no schema)
+   * - `json_schema`: output must conform to the provided JSON schema
+   *
+   * Support matrix:
+   * - OpenAI-compatible: all three types (json_schema requires recent SDK + model)
+   * - Tool-use-only providers (e.g. Anthropic / Bedrock Converse): satisfied
+   *   by the agent loop via an internal structured-output tool.
+   * - Providers without support reject unsupported responseFormat types.
+   */
+  responseFormat?: ResponseFormat;
   thinkingConfig?: ProviderThinkingConfig;
   maxOutputTokens?: number;
   temperature?: number;
@@ -38,6 +64,23 @@ export interface StreamMessageParams {
 }
 
 export type GenerateMessageParams = StreamMessageParams;
+
+export type ToolChoice =
+  | { type: 'auto' }
+  | { type: 'any' }
+  | { type: 'none' }
+  | { type: 'tool'; name: string };
+
+export type ResponseFormat =
+  | { type: 'text' }
+  | { type: 'json_object' }
+  | {
+      type: 'json_schema';
+      name: string;
+      schema: Record<string, unknown>;
+      description?: string;
+      strict?: boolean;
+    };
 
 export interface ProviderThinkingConfig {
   type: 'enabled' | 'disabled';
@@ -230,4 +273,36 @@ export interface ModelInfo {
   supportsPdfInput: boolean;
   inputTokenCostPer1M?: number;
   outputTokenCostPer1M?: number;
+  /**
+   * ResponseFormat types the provider/model can satisfy. Empty array = unsupported.
+   * 'text' is always implicitly supported and may be omitted from this list.
+   */
+  supportsResponseFormat?: Array<'text' | 'json_object' | 'json_schema'>;
+  /**
+   * How the provider delivers `responseFormat` on the wire:
+   * - 'native': mapped to a native parameter (e.g. OpenAI `response_format`, Gemini `responseSchema`).
+   * - 'tool-synthesis': legacy provider-local emulation path. New implementations
+   *   should prefer agent-loop synthesis so structured output can coexist with caller tools.
+   * - 'none': unsupported on this model.
+   */
+  responseFormatStrategy?: 'native' | 'tool-synthesis' | 'none';
+  /** Preferred JSON schema normalization dialect for this model/provider. */
+  schemaDialect?: ResponseFormatDialect;
+  /** Whether the provider honors the `toolChoice` parameter. */
+  supportsToolChoice?: boolean;
+}
+
+export type ResponseFormatDialect = 'standard' | 'openai-strict' | 'gemini' | 'anthropic';
+
+export function resolveResponseFormatStrategy(
+  info: ModelInfo
+): NonNullable<ModelInfo['responseFormatStrategy']> {
+  if (info.responseFormatStrategy) return info.responseFormatStrategy;
+  return info.supportsToolUse ? 'tool-synthesis' : 'none';
+}
+
+export function getSupportedResponseFormats(
+  info: ModelInfo
+): Array<'text' | 'json_object' | 'json_schema'> {
+  return info.supportsResponseFormat ?? ['text'];
 }

@@ -36,24 +36,34 @@ export type {
   AgentResult,
   AgentResultContent,
   AgentResultMessage,
+  OutputStreamEvent,
   RunOptions,
+  StreamOutputResult,
+  StructuredAgentResult,
+  StructuredOutputMode,
   UsageCallbackEvent,
 } from './core/agent.js';
 // Core
 export { createAgent, createAgentAsync } from './core/agent.js';
-export type { AgentErrorCode } from './core/errors.js';
+export type {
+  AgentErrorCode,
+  StructuredOutputErrorContext,
+  StructuredOutputErrorReason,
+} from './core/errors.js';
 export {
   AbortError,
   AgentError,
   BudgetExceededError,
   PermissionDeniedError,
   ProviderError,
+  StructuredOutputError,
   ToolExecutionError,
 } from './core/errors.js';
 export type {
   AgentEvent,
   CompactEvent,
   ErrorEvent,
+  ModelSwitchEvent,
   PermissionRequestEvent,
   TextEvent,
   ThinkingEvent,
@@ -64,6 +74,16 @@ export type {
   TurnStartEvent,
   UsageEvent,
 } from './core/events.js';
+export type {
+  InferOutputElement,
+  InferOutputPartial,
+  InferOutputResult,
+  OutputDefinition,
+  OutputKind,
+  ParseFinalContext,
+  PartialParseResult,
+} from './core/output.js';
+export { formatZodError, Output } from './core/output.js';
 export type { AgentSession, SessionOptions } from './core/session.js';
 export type {
   ContentBlock,
@@ -223,7 +243,9 @@ export type {
   ProviderStreamEvent,
   ProviderToolSchema,
   ProviderUsage,
+  ResponseFormat,
   StreamMessageParams,
+  ToolChoice,
 } from './providers/types.js';
 export type { XAIProviderConfig } from './providers/xai/index.js';
 

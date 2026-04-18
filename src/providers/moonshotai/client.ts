@@ -25,7 +25,7 @@ export class MoonshotAIProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getMoonshotAIModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getMoonshotAIModelInfo(modelId));
   }
 }
 
