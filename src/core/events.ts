@@ -10,6 +10,7 @@ export type AgentEvent =
   | ToolUseStartEvent
   | ToolUseDeltaEvent
   | ToolUseEndEvent
+  | ModelSwitchEvent
   | TurnStartEvent
   | TurnEndEvent
   | UsageEvent
@@ -48,6 +49,13 @@ export interface ToolUseEndEvent {
   toolName: string;
   result: unknown;
   isError: boolean;
+}
+
+export interface ModelSwitchEvent {
+  type: 'model_switch';
+  fromModel: string;
+  toModel: string;
+  reason: 'fallback_529';
 }
 
 export interface TurnStartEvent {

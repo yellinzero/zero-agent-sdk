@@ -25,7 +25,7 @@ export class DeepInfraProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getDeepInfraModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getDeepInfraModelInfo(modelId));
   }
 }
 

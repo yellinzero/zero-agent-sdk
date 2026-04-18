@@ -25,7 +25,7 @@ export class TogetherAIProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getTogetherAIModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getTogetherAIModelInfo(modelId));
   }
 }
 

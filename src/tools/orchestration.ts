@@ -12,6 +12,10 @@
 import { runPostToolUseHook, runPreToolUseHook } from '../hooks/runner.js';
 import type { HookConfig } from '../hooks/types.js';
 import { enforceResultLimit } from './result-limiter.js';
+import {
+  STRUCTURED_OUTPUT_ERROR_MARKER,
+  type StructuredOutputErrorMarker,
+} from './structured-output.js';
 import type { SDKTool, SDKToolResult, ToolExecutionContext, ToolProgressFn } from './types.js';
 import { findToolByName } from './types.js';
 
@@ -272,7 +276,7 @@ async function executeSingleTool(
     return {
       toolUseId: request.id,
       toolName: request.name,
-      result: { data: `Error: ${request._parseError}` },
+      result: { data: `Error: ${request._parseError}`, metadata: { parseError: true } },
       isError: true,
     };
   }
@@ -283,7 +287,7 @@ async function executeSingleTool(
     return {
       toolUseId: request.id,
       toolName: request.name,
-      result: { data: `Error: Unknown tool "${request.name}"` },
+      result: { data: `Error: Unknown tool "${request.name}"`, metadata: { unknownTool: true } },
       isError: true,
     };
   }
@@ -294,7 +298,10 @@ async function executeSingleTool(
     return {
       toolUseId: request.id,
       toolName: request.name,
-      result: { data: `Error: Invalid input for tool "${request.name}": ${parsed.error.message}` },
+      result: {
+        data: `Error: Invalid input for tool "${request.name}": ${parsed.error.message}`,
+        metadata: { invalidInput: true },
+      },
       isError: true,
     };
   }
@@ -304,7 +311,10 @@ async function executeSingleTool(
     return {
       toolUseId: request.id,
       toolName: request.name,
-      result: { data: `Error: Tool "${request.name}" is not enabled` },
+      result: {
+        data: `Error: Tool "${request.name}" is not enabled`,
+        metadata: { disabled: true },
+      },
       isError: true,
     };
   }
@@ -325,6 +335,7 @@ async function executeSingleTool(
         toolName: request.name,
         result: {
           data: `Tool execution blocked by hook: ${hookResult.stopReason ?? 'preToolUse hook'}`,
+          metadata: { hookBlocked: true },
         },
         isError: true,
       };
@@ -348,7 +359,7 @@ async function executeSingleTool(
       return {
         toolUseId: request.id,
         toolName: request.name,
-        result: { data: `Error: ${validation.message}` },
+        result: { data: `Error: ${validation.message}`, metadata: { validationFailed: true } },
         isError: true,
       };
     }
@@ -360,7 +371,10 @@ async function executeSingleTool(
     return {
       toolUseId: request.id,
       toolName: request.name,
-      result: { data: `Permission denied: ${permResult.message}` },
+      result: {
+        data: `Permission denied: ${permResult.message}`,
+        metadata: { permissionDenied: true },
+      },
       isError: true,
     };
   }
@@ -379,7 +393,7 @@ async function executeSingleTool(
         return {
           toolUseId: request.id,
           toolName: request.name,
-          result: { data: 'Permission denied by user' },
+          result: { data: 'Permission denied by user', metadata: { permissionDenied: true } },
           isError: true,
         };
       }
@@ -392,7 +406,10 @@ async function executeSingleTool(
       return {
         toolUseId: request.id,
         toolName: request.name,
-        result: { data: 'Permission denied: no permission handler configured' },
+        result: {
+          data: 'Permission denied: no permission handler configured',
+          metadata: { permissionDenied: true },
+        },
         isError: true,
       };
     }
@@ -451,7 +468,22 @@ async function executeSingleTool(
     return {
       toolUseId: request.id,
       toolName: request.name,
-      result: { data: `Error executing tool "${request.name}": ${message}` },
+      result: {
+        data: `Error executing tool "${request.name}": ${message}`,
+        metadata: {
+          executionError: true,
+          ...(error &&
+          typeof error === 'object' &&
+          STRUCTURED_OUTPUT_ERROR_MARKER in error &&
+          (
+            error as {
+              [STRUCTURED_OUTPUT_ERROR_MARKER]?: StructuredOutputErrorMarker;
+            }
+          )[STRUCTURED_OUTPUT_ERROR_MARKER]?.schemaValidationFailure
+            ? { schemaValidationFailure: true }
+            : {}),
+        },
+      },
       isError: true,
     };
   }

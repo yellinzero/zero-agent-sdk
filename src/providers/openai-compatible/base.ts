@@ -15,9 +15,13 @@ import type {
   ProviderStreamEvent,
   ProviderToolSchema,
   ProviderUsage,
+  ResponseFormat,
+  ResponseFormatDialect,
   StreamMessageParams,
   SystemPromptBlock,
+  ToolChoice,
 } from '../types.js';
+import { getSupportedResponseFormats, resolveResponseFormatStrategy } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -94,6 +98,27 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
 
   /** Get model info for a known model, or return a default. */
   abstract getModelInfo(modelId: string): ModelInfo;
+
+  /**
+   * Fill in structured-output capability defaults for OpenAI-compatible providers.
+   * Subclasses should call this from `getModelInfo()` to normalize the response.
+   * Providers that differ (e.g. a non-OpenAI-shape endpoint) can override.
+   */
+  protected withStructuredOutputDefaults(info: ModelInfo): ModelInfo {
+    const supportsResponseFormat =
+      info.supportsResponseFormat ?? (info.supportsToolUse ? ['text', 'json_object'] : ['text']);
+    return {
+      ...info,
+      supportsToolChoice: info.supportsToolChoice ?? true,
+      supportsResponseFormat,
+      responseFormatStrategy:
+        info.responseFormatStrategy ?? (info.supportsToolUse ? 'tool-synthesis' : 'none'),
+    };
+  }
+
+  protected getResponseFormatDialect(_params: StreamMessageParams): ResponseFormatDialect {
+    return 'openai-strict';
+  }
 
   /**
    * Optional hook to customize the request before sending.
@@ -307,6 +332,17 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
     params: StreamMessageParams,
     stream: boolean
   ): Record<string, unknown> {
+    const modelInfo = this.getModelInfo(params.model);
+    const strategy = resolveResponseFormatStrategy(modelInfo);
+    const supportedResponseFormats = getSupportedResponseFormats(modelInfo);
+    if (params.responseFormat && params.responseFormat.type !== 'text') {
+      if (strategy !== 'native' || !supportedResponseFormats.includes(params.responseFormat.type)) {
+        throw new Error(
+          `INVALID_CONFIG: ${this.getProviderName()} model '${params.model}' does not support responseFormat '${params.responseFormat.type}' natively.`
+        );
+      }
+    }
+
     const messages = this.buildMessages(params.messages, params.systemPrompt);
 
     const request: Record<string, unknown> = {
@@ -318,8 +354,6 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
     if (stream) {
       request.stream_options = { include_usage: true };
     }
-
-    const modelInfo = this.getModelInfo(params.model);
     if (params.maxOutputTokens) {
       request.max_tokens = params.maxOutputTokens;
     } else if (!modelInfo.supportsThinking) {
@@ -328,6 +362,23 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
 
     if (params.tools && params.tools.length > 0) {
       request.tools = params.tools.map((t) => this.mapToolSchema(t));
+    }
+
+    if (params.toolChoice) {
+      const mapped = this.mapToolChoice(params.toolChoice);
+      if (mapped !== undefined) {
+        request.tool_choice = mapped;
+      }
+    }
+
+    if (params.responseFormat) {
+      const mapped = this.mapResponseFormat(
+        params.responseFormat,
+        this.getResponseFormatDialect(params)
+      );
+      if (mapped !== undefined) {
+        request.response_format = mapped;
+      }
     }
 
     if (params.temperature !== undefined && !modelInfo.supportsThinking) {
@@ -343,6 +394,38 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
     }
 
     return this.customizeRequest(request, params);
+  }
+
+  protected mapToolChoice(choice: ToolChoice): unknown {
+    switch (choice.type) {
+      case 'auto':
+        return 'auto';
+      case 'any':
+        return 'required';
+      case 'none':
+        return 'none';
+      case 'tool':
+        return { type: 'function', function: { name: choice.name } };
+    }
+  }
+
+  protected mapResponseFormat(format: ResponseFormat, _dialect: ResponseFormatDialect): unknown {
+    switch (format.type) {
+      case 'text':
+        return { type: 'text' };
+      case 'json_object':
+        return { type: 'json_object' };
+      case 'json_schema':
+        return {
+          type: 'json_schema',
+          json_schema: {
+            name: format.name,
+            schema: format.schema,
+            ...(format.description !== undefined ? { description: format.description } : {}),
+            ...(format.strict !== undefined ? { strict: format.strict } : {}),
+          },
+        };
+    }
   }
 
   // ---------------------------------------------------------------------------

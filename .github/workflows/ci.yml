@@ -28,6 +28,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Lint
         run: pnpm check
 

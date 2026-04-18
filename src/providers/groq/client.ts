@@ -25,7 +25,7 @@ export class GroqProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getGroqModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getGroqModelInfo(modelId));
   }
 }
 

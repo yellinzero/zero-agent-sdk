@@ -51,7 +51,7 @@ export class AzureOpenAIProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getAzureModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getAzureModelInfo(modelId));
   }
 
   protected override async getClient(): Promise<any> {

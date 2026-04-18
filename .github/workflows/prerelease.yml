@@ -40,7 +40,8 @@ jobs:
         run: |
           SHA=$(git rev-parse --short HEAD)
           VERSION=$(node -p "require('./package.json').version")
-          BETA_VERSION="${VERSION}-beta.${SHA}"
+          BASE_VERSION="${VERSION%%-*}"
+          BETA_VERSION="${BASE_VERSION}-beta.${SHA}"
           node -e "
             const pkg = require('./package.json');
             pkg.version = '${BETA_VERSION}';

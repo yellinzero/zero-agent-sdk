@@ -53,12 +53,22 @@ export interface GoogleGenerationConfig {
   topP?: number;
   maxOutputTokens?: number;
   stopSequences?: string[];
+  responseMimeType?: string;
+  responseSchema?: Record<string, unknown>;
+}
+
+export interface GoogleToolConfig {
+  functionCallingConfig: {
+    mode: 'AUTO' | 'ANY' | 'NONE';
+    allowedFunctionNames?: string[];
+  };
 }
 
 export interface GoogleGenerateContentRequest {
   contents: GoogleContent[];
   systemInstruction?: { parts: GoogleTextPart[] };
   tools?: GoogleTool[];
+  toolConfig?: GoogleToolConfig;
   generationConfig?: GoogleGenerationConfig;
 }
 

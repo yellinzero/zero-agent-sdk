@@ -13,10 +13,13 @@ import type {
   ProviderResponse,
   ProviderStreamEvent,
   ProviderUsage,
+  ResponseFormat,
   StreamMessageParams,
+  ToolChoice,
 } from '../types.js';
 import { convertMessages, convertSystemPrompt, convertTools } from './message-converter.js';
 import { getGoogleModelInfo } from './models.js';
+import { jsonSchemaToGemini } from './schema-utils.js';
 import type {
   GoogleCandidate,
   GoogleGenerateContentRequest,
@@ -24,6 +27,7 @@ import type {
   GoogleGenerationConfig,
   GooglePart,
   GoogleStreamChunk,
+  GoogleToolConfig,
   GoogleUsageMetadata,
 } from './types.js';
 
@@ -69,7 +73,13 @@ export class GoogleProvider implements ModelProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getGoogleModelInfo(modelId);
+    const info = getGoogleModelInfo(modelId);
+    return {
+      ...info,
+      supportsToolChoice: info.supportsToolChoice ?? true,
+      supportsResponseFormat: info.supportsResponseFormat ?? ['text', 'json_object', 'json_schema'],
+      responseFormatStrategy: info.responseFormatStrategy ?? 'native',
+    };
   }
 
   async *streamMessage(params: StreamMessageParams): AsyncGenerator<ProviderStreamEvent> {
@@ -254,6 +264,11 @@ export class GoogleProvider implements ModelProvider {
       request.tools = convertTools(params.tools);
     }
 
+    const toolConfig = this.buildToolConfig(params.toolChoice);
+    if (toolConfig) {
+      request.toolConfig = toolConfig;
+    }
+
     const generationConfig: GoogleGenerationConfig = {};
     const modelInfo = this.getModelInfo(params.model);
 
@@ -275,9 +290,44 @@ export class GoogleProvider implements ModelProvider {
       generationConfig.stopSequences = params.stopSequences;
     }
 
+    // responseFormat → generationConfig.responseMimeType + responseSchema
+    if (params.responseFormat) {
+      this.applyResponseFormat(generationConfig, params.responseFormat);
+    }
+
     request.generationConfig = generationConfig;
 
     return request;
+  }
+
+  private buildToolConfig(choice: ToolChoice | undefined): GoogleToolConfig | undefined {
+    if (!choice) return undefined;
+    switch (choice.type) {
+      case 'auto':
+        return { functionCallingConfig: { mode: 'AUTO' } };
+      case 'any':
+        return { functionCallingConfig: { mode: 'ANY' } };
+      case 'none':
+        return { functionCallingConfig: { mode: 'NONE' } };
+      case 'tool':
+        return {
+          functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [choice.name] },
+        };
+    }
+  }
+
+  private applyResponseFormat(cfg: GoogleGenerationConfig, format: ResponseFormat): void {
+    switch (format.type) {
+      case 'text':
+        return;
+      case 'json_object':
+        cfg.responseMimeType = 'application/json';
+        return;
+      case 'json_schema':
+        cfg.responseMimeType = 'application/json';
+        cfg.responseSchema = jsonSchemaToGemini(format.schema);
+        return;
+    }
   }
 
   // ---------------------------------------------------------------------------

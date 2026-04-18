@@ -16,6 +16,7 @@ import type {
   ProviderUsage,
   StreamMessageParams,
   SystemPromptBlock,
+  ToolChoice,
 } from '../types.js';
 import { getAnthropicModelInfo } from './models.js';
 
@@ -129,14 +130,20 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getAnthropicModelInfo(modelId);
+    const info = getAnthropicModelInfo(modelId);
+    return {
+      ...info,
+      supportsToolChoice: info.supportsToolChoice ?? true,
+      supportsResponseFormat: info.supportsResponseFormat ?? ['text'],
+      responseFormatStrategy: info.responseFormatStrategy ?? 'tool-synthesis',
+    };
   }
 
   // ---------------------------------------------------------------------------
   // Request Building
   // ---------------------------------------------------------------------------
 
-  private buildRequestParams(params: StreamMessageParams): Record<string, unknown> {
+  protected buildRequestParams(params: StreamMessageParams): Record<string, unknown> {
     const request: Record<string, unknown> = {
       model: params.model,
       messages: params.messages.map((m) => this.mapMessageToAnthropic(m)),
@@ -156,13 +163,20 @@ export class AnthropicProvider implements ModelProvider {
       }
     }
 
-    // Tools
-    if (params.tools && params.tools.length > 0) {
+    // Tools + tool_choice (standard path).
+    // Anthropic has no { type: 'none' } tool_choice — the native way to
+    // disable tools is to not send the tools array. We honor that semantic.
+    const forceNoTools = params.toolChoice?.type === 'none';
+    if (params.tools && params.tools.length > 0 && !forceNoTools) {
       request.tools = params.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
         input_schema: tool.inputSchema,
       }));
+
+      if (params.toolChoice && params.toolChoice.type !== 'none') {
+        request.tool_choice = this.mapToolChoice(params.toolChoice);
+      }
     }
 
     // Thinking
@@ -191,6 +205,19 @@ export class AnthropicProvider implements ModelProvider {
     }
 
     return request;
+  }
+
+  private mapToolChoice(choice: ToolChoice): Record<string, unknown> | null {
+    switch (choice.type) {
+      case 'auto':
+        return { type: 'auto' };
+      case 'any':
+        return { type: 'any' };
+      case 'tool':
+        return { type: 'tool', name: choice.name };
+      case 'none':
+        return null;
+    }
   }
 
   // ---------------------------------------------------------------------------

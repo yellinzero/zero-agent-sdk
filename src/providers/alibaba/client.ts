@@ -26,7 +26,7 @@ export class AlibabaProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getAlibabaModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getAlibabaModelInfo(modelId));
   }
 
   protected override customizeRequest(

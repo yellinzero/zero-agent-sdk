@@ -26,7 +26,7 @@ export class BasetenProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getBasetenModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getBasetenModelInfo(modelId));
   }
 }
 

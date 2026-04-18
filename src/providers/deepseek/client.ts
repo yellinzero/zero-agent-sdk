@@ -26,7 +26,7 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getDeepSeekModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getDeepSeekModelInfo(modelId));
   }
 
   protected override customizeRequest(

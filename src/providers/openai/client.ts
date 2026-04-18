@@ -45,7 +45,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getOpenAIModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getOpenAIModelInfo(modelId));
   }
 
   protected override async getClient(): Promise<any> {

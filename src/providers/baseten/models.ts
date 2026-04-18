@@ -11,6 +11,7 @@ const DEFAULT_MODEL_INFO: ModelInfo = {
   maxOutputTokens: 4_096,
   supportsThinking: false,
   supportsToolUse: true,
+  supportsResponseFormat: ['text', 'json_object'],
   supportsImages: false,
   supportsPdfInput: false,
 };

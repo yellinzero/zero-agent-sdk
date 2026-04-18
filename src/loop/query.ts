@@ -5,7 +5,6 @@
  * and permission_request events.
  */
 
-import { z } from 'zod';
 import {
   type AutoCompactConfig,
   autoCompactIfNeeded,
@@ -15,9 +14,17 @@ import {
   recordCompactSuccess,
   truncateHeadForPTLRetry,
 } from '../context/compact.js';
-import type { UsageCallbackEvent } from '../core/agent.js';
-import { BudgetExceededError, ProviderError, AbortError as SDKAbortError } from '../core/errors.js';
+import type { StructuredOutputMode, UsageCallbackEvent } from '../core/agent.js';
+import {
+  AgentError,
+  BudgetExceededError,
+  ProviderError,
+  AbortError as SDKAbortError,
+  StructuredOutputError,
+  ToolExecutionError,
+} from '../core/errors.js';
 import type { AgentEvent } from '../core/events.js';
+import type { OutputDefinition } from '../core/output.js';
 import type { Logger, ThinkingConfig, Usage } from '../core/types.js';
 import {
   runCompactHook,
@@ -42,11 +49,20 @@ import type {
   ProviderToolSchema,
   ProviderToolUseBlock,
   ProviderUsage,
+  ResponseFormat,
+  ResponseFormatDialect,
   SystemPromptBlock,
+  ToolChoice,
 } from '../providers/types.js';
+import { getSupportedResponseFormats, resolveResponseFormatStrategy } from '../providers/types.js';
 import { mapProviderError } from '../providers/utils/error-mapper.js';
 import { runTools, type ToolUseRequest } from '../tools/orchestration.js';
 import { enforceContentLimit, enforceMultimodalLimit } from '../tools/result-limiter.js';
+import {
+  createStructuredOutputTool,
+  isSyntheticStructuredOutputTool,
+  SYNTHETIC_OUTPUT_TOOL_NAME,
+} from '../tools/structured-output.js';
 import type { AgentSessionState, SDKTool, ToolExecutionContext } from '../tools/types.js';
 import { pruneReadFileState } from '../tools/types.js';
 import type { Tracer } from '../tracing/tracer.js';
@@ -70,6 +86,7 @@ import {
   estimateMessagesTokenCount,
   providerUsageToUsage,
 } from '../utils/tokens.js';
+import { normalizeForProvider, zodToJsonSchema } from './schema-utils.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,6 +104,20 @@ export interface AgentLoopConfig {
   maxTokens?: number;
   maxOutputTokens?: number;
   temperature?: number;
+  /** Constrain how the model uses provided tools. See StreamMessageParams.toolChoice. */
+  toolChoice?: ToolChoice;
+  /** Constrain the model's output format. See StreamMessageParams.responseFormat. */
+  responseFormat?: ResponseFormat;
+  /**
+   * Structured output definition. When set, the loop wires `responseFormat`
+   * from `output.responseFormat` and (for tool-synthesis providers) injects
+   * the synthetic structured-output tool driven by `output.validate`.
+   */
+  output?: OutputDefinition<any, any, any>;
+  /** Maximum repair attempts for tool-synthesis structured output. Default: 2. */
+  maxStructuredOutputRepairs?: number;
+  /** How tool-synthesis structured output coexists with normal tools. */
+  structuredOutputMode?: StructuredOutputMode;
   permissionMode: PermissionMode;
   permissionHandler?: PermissionHandler;
   /** Static permission rules evaluated before the handler */
@@ -280,6 +311,26 @@ export async function* agentLoop(
   const { provider, model, tools, maxTurns, signal } = config;
   const logger = config.logger;
   const abortController = createLinkedAbortController(signal);
+  const structuredOutputMode = config.structuredOutputMode ?? 'strict';
+
+  // Resolve the wire-format response policy. `config.output` is the canonical
+  // source; `config.responseFormat` remains a lower-level override path for
+  // callers building bespoke loops without the Output abstraction.
+  let structuredState = await rebuildStructuredOutputState(
+    provider,
+    model,
+    config,
+    tools,
+    structuredOutputMode
+  );
+
+  // Repair budget for the tool-synthesis path. Each failed synthetic-tool
+  // invocation increments `repairAttempts`; the loop bails out once the budget
+  // is exceeded and surfaces a `StructuredOutputError`.
+  const maxRepairs = config.maxStructuredOutputRepairs ?? 2;
+  let repairAttempts = 0;
+  const repairHistory: string[] = [];
+
   let cumulativeUsage = emptyUsage();
   let turnNumber = 0;
   let compactCircuit: CompactCircuitState = createCompactCircuitState();
@@ -302,9 +353,6 @@ export async function* agentLoop(
       attributes: { model, maxTurns },
     }) ?? '';
 
-  // Build tool schemas for the provider (pre-filter denied tools)
-  const toolSchemas = await buildToolSchemas(tools, config.permissionRules);
-
   // Session state — use externally-managed state if provided (persists across send() calls),
   // otherwise create a loop-local state (single run() use-case).
   let sessionState: AgentSessionState = config.sessionState ?? {};
@@ -318,7 +366,7 @@ export async function* agentLoop(
   let execContext: ToolExecutionContext = {
     cwd: currentCwd,
     abortSignal: abortController.signal,
-    tools,
+    tools: structuredState.toolsForExecution,
     messages: [],
     model: currentModel,
     debug: false,
@@ -369,6 +417,20 @@ export async function* agentLoop(
     let turnStopReason = 'unknown';
 
     try {
+      if (config.maxTokens) {
+        const totalTokens = cumulativeUsage.inputTokens + cumulativeUsage.outputTokens;
+        if (totalTokens >= config.maxTokens) {
+          logger?.info('Budget exceeded', { type: 'tokens', totalTokens, limit: config.maxTokens });
+          yield {
+            type: 'error',
+            error: new BudgetExceededError('Token budget exceeded', 'tokens'),
+          };
+          turnStopReason = 'budget_exceeded';
+          yield* finalizeTurn(config, turnNumber, 'budget_exceeded', cumulativeUsage);
+          break;
+        }
+      }
+
       // --- onTurnStart hook (1.1) ---
       const turnStartChain = await runTurnStartHook(config.hooks, {
         type: 'onTurnStart',
@@ -390,7 +452,7 @@ export async function* agentLoop(
           const tokensBefore = estimateMessagesTokenCount(messages);
           const compactResult = await autoCompactIfNeeded(messages, {
             provider,
-            model,
+            model: currentModel,
             contextWindow: config.contextWindow,
             threshold: config.compactThreshold ?? 0.8,
             circuitState: compactCircuit,
@@ -465,8 +527,20 @@ export async function* agentLoop(
         // partial output leakage when a retry occurs after partial streaming.
         const pendingEvents: AgentEvent[] = [];
         const MAX_PENDING_EVENTS = 10_000;
+        let pendingEventsDropped = false;
         const bufferEvent = (evt: AgentEvent) => {
-          if (pendingEvents.length < MAX_PENDING_EVENTS) pendingEvents.push(evt);
+          if (pendingEvents.length < MAX_PENDING_EVENTS) {
+            pendingEvents.push(evt);
+            return;
+          }
+          if (!pendingEventsDropped) {
+            pendingEventsDropped = true;
+            logger?.warn('Event buffer full', {
+              maxPendingEvents: MAX_PENDING_EVENTS,
+              model: currentModel,
+              turnNumber,
+            });
+          }
         };
         let attemptSucceeded = false;
 
@@ -474,8 +548,18 @@ export async function* agentLoop(
           const streamParams = {
             model: currentModel,
             messages: normalizeMessageOrder([...messages]),
-            systemPrompt: config.systemPrompt ?? '',
-            tools: toolSchemas.length > 0 ? toolSchemas : undefined,
+            systemPrompt: appendStructuredOutputSystemPrompt(
+              config.systemPrompt ?? '',
+              structuredState
+            ),
+            tools: structuredState.toolSchemas.length > 0 ? structuredState.toolSchemas : undefined,
+            toolChoice: structuredState.effectiveToolChoice,
+            // When tool-synthesis is in play, the synthetic tool already
+            // carries the schema constraint — passing `responseFormat` to the
+            // provider is redundant and may collide with tool_choice rules.
+            responseFormat: structuredState.syntheticStructuredOutputTool
+              ? undefined
+              : structuredState.effectiveResponseFormat,
             thinkingConfig: config.thinkingConfig
               ? {
                   type: config.thinkingConfig.type,
@@ -592,6 +676,12 @@ export async function* agentLoop(
           }
 
           responseContent = contentBlocks;
+          if (
+            stopReason !== 'max_tokens' &&
+            contentBlocks.some((block) => block.type === 'tool_use')
+          ) {
+            stopReason = 'tool_use';
+          }
           lastError = null;
           break; // Success — exit retry loop
         } catch (error) {
@@ -688,14 +778,26 @@ export async function* agentLoop(
                 consecutive529s >= (config.maxConsecutive529s ?? 3) &&
                 currentModel !== config.fallbackModel
               ) {
-                currentModel = config.fallbackModel;
+                const previousModel = currentModel;
+                const nextModel = config.fallbackModel;
+                structuredState = await rebuildStructuredOutputState(
+                  provider,
+                  nextModel,
+                  config,
+                  tools,
+                  structuredOutputMode
+                );
+                currentModel = nextModel;
+                execContext = {
+                  ...execContext,
+                  model: currentModel,
+                  tools: structuredState.toolsForExecution,
+                };
                 yield {
-                  type: 'error',
-                  error: new ProviderError(
-                    `Switching to fallback model: ${currentModel}`,
-                    529,
-                    provider.providerId
-                  ),
+                  type: 'model_switch',
+                  fromModel: previousModel,
+                  toModel: currentModel,
+                  reason: 'fallback_529',
                 };
               }
             } else {
@@ -881,11 +983,13 @@ export async function* agentLoop(
 
       const toolResults: ProviderContentBlock[] = [];
       const additionalMessages: ProviderMessage[] = [];
+      let structuredOutputCompleted = false;
 
+      let sawNonSynthesisToolCall = false;
       for await (const update of runTools(toolRequests, execContext, {
         onPermissionRequest: async (tool, input) => {
           // Resolve isReadOnly/isDestructive from tool definition (1.6)
-          const matchedTool = tools.find((t) => t.name === tool);
+          const matchedTool = structuredState.toolsForExecution.find((t) => t.name === tool);
           const parsedInput = matchedTool?.inputSchema.safeParse(input);
           // When validation fails, use conservative defaults (non-readonly, potentially destructive)
           const isReadOnly = parsedInput?.success
@@ -996,7 +1100,7 @@ export async function* agentLoop(
         }
 
         // Map tool result using the tool's mapToolResult if available
-        const tool = tools.find((t) => t.name === result.toolName);
+        const tool = structuredState.toolsForExecution.find((t) => t.name === result.toolName);
         let resultContent: string | ProviderContentBlock[];
         if (tool && result.result.data !== undefined) {
           const mapped = tool.mapToolResult(result.result.data, result.toolUseId);
@@ -1034,6 +1138,65 @@ export async function* agentLoop(
           content: resultContent,
           is_error: result.isError,
         } as ProviderToolResultBlock);
+
+        if (!isSyntheticStructuredOutputTool(result.toolName)) {
+          sawNonSynthesisToolCall = true;
+        }
+
+        if (
+          isSyntheticStructuredOutputTool(result.toolName) &&
+          structuredState.syntheticStructuredOutputTool
+        ) {
+          if (!result.isError) {
+            structuredOutputCompleted = true;
+            continue;
+          }
+
+          // Only count output-shape failures toward the repair budget — these
+          // are things the model can plausibly fix on another attempt:
+          //   - schemaValidationFailure: zod validation failed inside the
+          //     synthetic tool call
+          //   - invalidInput: synthetic tool's input JSON schema rejected the
+          //     model's arguments
+          //   - parseError: streaming JSON for tool arguments was malformed
+          //
+          // Other failure modes (hook block, permission denial, unexpected
+          // internal execution error) are configuration or environmental
+          // issues that re-asking the model cannot resolve. Surface them
+          // immediately with the real reason instead of spinning through the
+          // repair budget.
+          const metadata = result.result.metadata ?? {};
+          const isRepairableOutputFailure =
+            metadata.schemaValidationFailure === true ||
+            metadata.invalidInput === true ||
+            metadata.parseError === true;
+          const errorMessage =
+            typeof result.result.data === 'string'
+              ? result.result.data
+              : JSON.stringify(result.result.data);
+
+          if (!isRepairableOutputFailure) {
+            throw new ToolExecutionError(
+              `Structured output tool failed: ${errorMessage}`,
+              result.toolName
+            );
+          }
+
+          repairAttempts += 1;
+          repairHistory.push(errorMessage);
+          if (repairAttempts > maxRepairs) {
+            throw new StructuredOutputError(
+              `Structured output failed after ${repairAttempts} repair attempts.`,
+              'max_repairs',
+              {
+                kind: config.output?.kind,
+                attempts: repairAttempts,
+                repairHistory,
+                usage: cumulativeUsage,
+              }
+            );
+          }
+        }
       }
 
       // Enforce message-level aggregate budget for tool results to prevent
@@ -1096,6 +1259,20 @@ export async function* agentLoop(
       };
       messages.push(toolResultMessage);
 
+      if (structuredState.syntheticStructuredOutputTool) {
+        if (sawNonSynthesisToolCall) {
+          logger?.warn('Structured output synthesis saw unexpected extra tool calls', {
+            model: currentModel,
+            turnNumber,
+          });
+        }
+        if (structuredOutputCompleted) {
+          turnStopReason = 'end_turn';
+          yield* finalizeTurn(config, turnNumber, 'end_turn', cumulativeUsage);
+          return;
+        }
+      }
+
       // Prune readFileState to prevent memory leaks in long sessions
       pruneReadFileState(readFileState);
 
@@ -1129,15 +1306,191 @@ export async function* agentLoop(
 // ---------------------------------------------------------------------------
 
 /**
+ * Decide whether the agent loop should inject the synthetic structured-output
+ * tool. We do so when the caller asked for a structured response (anything
+ * other than text) AND the provider/model declares `tool-synthesis` as its
+ * delivery strategy or doesn't support the requested format natively.
+ */
+function needsToolSynthesis(
+  provider: ModelProvider,
+  model: string,
+  responseFormat: ResponseFormat | undefined
+): boolean {
+  if (!responseFormat || responseFormat.type === 'text') return false;
+  const info = provider.getModelInfo(model);
+  const strategy = resolveResponseFormatStrategy(info);
+  if (strategy === 'tool-synthesis') return true;
+  const supported = getSupportedResponseFormats(info);
+  return !supported.includes(responseFormat.type) && info.supportsToolUse;
+}
+
+type StructuredOutputState = {
+  effectiveResponseFormat: ResponseFormat | undefined;
+  syntheticStructuredOutputTool: SDKTool | null;
+  effectiveToolChoice?: ToolChoice;
+  toolsForExecution: SDKTool[];
+  toolSchemas: ProviderToolSchema[];
+  mixedModeInstruction?: string;
+};
+
+async function rebuildStructuredOutputState(
+  provider: ModelProvider,
+  model: string,
+  config: AgentLoopConfig,
+  userTools: SDKTool[],
+  structuredOutputMode: StructuredOutputMode
+): Promise<StructuredOutputState> {
+  const effectiveResponseFormat = config.output
+    ? config.output.responseFormat
+    : config.responseFormat;
+  validateStructuredOutputCompatibility(provider, model, config, effectiveResponseFormat);
+  const syntheticStructuredOutputTool = needsToolSynthesis(provider, model, effectiveResponseFormat)
+    ? createStructuredOutputTool(config.output)
+    : null;
+  const effectiveToolChoice =
+    syntheticStructuredOutputTool && config.output
+      ? resolveStructuredToolChoice(config.toolChoice, structuredOutputMode)
+      : config.toolChoice;
+  const toolsForExecution = syntheticStructuredOutputTool
+    ? [...userTools, syntheticStructuredOutputTool]
+    : userTools;
+  const toolSchemas = await buildToolSchemas(
+    toolsForExecution,
+    provider,
+    model,
+    config.permissionRules
+  );
+
+  return {
+    effectiveResponseFormat,
+    syntheticStructuredOutputTool,
+    effectiveToolChoice,
+    toolsForExecution,
+    toolSchemas,
+    mixedModeInstruction:
+      syntheticStructuredOutputTool && structuredOutputMode === 'mixed'
+        ? `Use the tool "${SYNTHETIC_OUTPUT_TOOL_NAME}" exactly once when you have the final structured answer. You may use other tools first if needed.`
+        : undefined,
+  };
+}
+
+function validateStructuredOutputCompatibility(
+  provider: ModelProvider,
+  model: string,
+  config: AgentLoopConfig,
+  responseFormat: ResponseFormat | undefined
+): void {
+  if (!responseFormat || responseFormat.type === 'text') return;
+  const info = provider.getModelInfo(model);
+  const supported = getSupportedResponseFormats(info);
+  const strategy = resolveResponseFormatStrategy(info);
+  const canSynthesize =
+    strategy === 'tool-synthesis' ||
+    (!supported.includes(responseFormat.type) && info.supportsToolUse);
+  if (canSynthesize || supported.includes(responseFormat.type)) return;
+
+  throw new AgentError(
+    `Provider '${provider.providerId}' / model '${model}' does not support responseFormat type '${responseFormat.type}'` +
+      (config.output ? ` (Output.${config.output.kind}).` : '.'),
+    'INVALID_CONFIG'
+  );
+}
+
+function appendStructuredOutputSystemPrompt(
+  systemPrompt: string | SystemPromptBlock[],
+  structuredState: StructuredOutputState
+): string | SystemPromptBlock[] {
+  if (!structuredState.mixedModeInstruction) return systemPrompt;
+  if (typeof systemPrompt === 'string') {
+    return systemPrompt
+      ? `${systemPrompt}\n\n${structuredState.mixedModeInstruction}`
+      : structuredState.mixedModeInstruction;
+  }
+  return [
+    ...systemPrompt,
+    {
+      type: 'text',
+      text: structuredState.mixedModeInstruction,
+    },
+  ];
+}
+
+function resolveStructuredToolChoice(
+  toolChoice: ToolChoice | undefined,
+  structuredOutputMode: StructuredOutputMode
+): ToolChoice {
+  if (structuredOutputMode === 'mixed') {
+    if (!toolChoice) return { type: 'any' };
+    if (toolChoice.type === 'tool' && toolChoice.name !== SYNTHETIC_OUTPUT_TOOL_NAME) {
+      throw new AgentError(
+        'Structured output mixed mode cannot force a non-structured tool via toolChoice. Remove the toolChoice override or select the internal output tool.',
+        'INVALID_CONFIG'
+      );
+    }
+    return toolChoice.type === 'tool' && toolChoice.name === SYNTHETIC_OUTPUT_TOOL_NAME
+      ? toolChoice
+      : { type: 'any' };
+  }
+
+  if (!toolChoice) {
+    return { type: 'tool', name: SYNTHETIC_OUTPUT_TOOL_NAME };
+  }
+  if (toolChoice.type === 'tool' && toolChoice.name === SYNTHETIC_OUTPUT_TOOL_NAME) {
+    return toolChoice;
+  }
+  throw new AgentError(
+    'Structured output synthesis reserves toolChoice for the internal output tool. ' +
+      'Remove the toolChoice override for this run.',
+    'INVALID_CONFIG'
+  );
+}
+
+function resolveSchemaDialect(
+  provider: ModelProvider,
+  model: string,
+  modelInfo = provider.getModelInfo(model)
+): ResponseFormatDialect {
+  if (modelInfo.schemaDialect) return modelInfo.schemaDialect;
+  const providerId = provider.providerId;
+  if (providerId === 'google' || providerId === 'google-vertex') return 'gemini';
+  if (providerId === 'anthropic' || providerId === 'amazon-bedrock') return 'anthropic';
+  if (
+    providerId === 'openai' ||
+    providerId === 'azure' ||
+    providerId === 'deepseek' ||
+    providerId === 'mistral' ||
+    providerId === 'groq' ||
+    providerId === 'perplexity' ||
+    providerId === 'fireworks' ||
+    providerId === 'togetherai' ||
+    providerId === 'deepinfra' ||
+    providerId === 'cohere' ||
+    providerId === 'alibaba' ||
+    providerId === 'moonshotai' ||
+    providerId === 'baseten' ||
+    providerId === 'cerebras' ||
+    providerId === 'huggingface' ||
+    providerId === 'xai'
+  ) {
+    return 'openai-strict';
+  }
+  if (model.startsWith('gpt-') || model.startsWith('o')) return 'openai-strict';
+  return 'standard';
+}
+
+/**
  * Build tool schemas for the provider.
  * Pre-filters tools that are unconditionally denied by permission rules
  * to avoid wasting tokens on tools the model can never use.
  */
 async function buildToolSchemas(
   tools: SDKTool[],
+  provider: ModelProvider,
+  model: string,
   permissionRules?: PermissionRule[]
 ): Promise<ProviderToolSchema[]> {
   const schemas: ProviderToolSchema[] = [];
+  const dialect = resolveSchemaDialect(provider, model);
 
   for (const tool of tools) {
     if (!tool.isEnabled()) continue;
@@ -1155,9 +1508,9 @@ async function buildToolSchemas(
 
     let inputSchema: Record<string, unknown>;
     if (tool.inputJSONSchema) {
-      inputSchema = tool.inputJSONSchema;
+      inputSchema = normalizeForProvider(tool.inputJSONSchema, dialect);
     } else {
-      inputSchema = zodToJsonSchema(tool.inputSchema);
+      inputSchema = normalizeForProvider(zodToJsonSchema(tool.inputSchema), dialect);
     }
 
     schemas.push({
@@ -1168,19 +1521,4 @@ async function buildToolSchemas(
   }
 
   return schemas;
-}
-
-/**
- * Convert Zod schema to JSON Schema using the zod-to-json-schema library.
- * Results are cached per schema instance for performance.
- */
-const schemaCache = new WeakMap<z.ZodType, Record<string, unknown>>();
-
-function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
-  let cached = schemaCache.get(schema);
-  if (cached) return cached;
-  cached = z.toJSONSchema(schema, { target: 'openapi-3.0' }) as Record<string, unknown>;
-  delete cached.$schema;
-  schemaCache.set(schema, cached);
-  return cached;
 }

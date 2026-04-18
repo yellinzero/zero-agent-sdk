@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { AgentEvent } from '../core/events.js';
 import type { ModelProvider, ProviderStreamEvent } from '../providers/types.js';
 
@@ -117,5 +118,106 @@ describe('Token budget enforcement', () => {
       (e) => e.type === 'error' && e.error.message.includes('Token budget exceeded')
     );
     expect(errorEvent).toBeUndefined();
+  });
+
+  it('blocks a new turn before querying when cumulative usage already exhausted the budget', async () => {
+    const { agentLoop } = await import('../loop/query.js');
+    const { createUserMessage } = await import('../utils/messages.js');
+
+    let calls = 0;
+    const wrappedProvider: ModelProvider = {
+      providerId: 'test',
+      async *streamMessage() {
+        calls++;
+        yield {
+          type: 'message_start' as const,
+          usage: { inputTokens: 600, outputTokens: 0 },
+        } satisfies ProviderStreamEvent;
+        yield {
+          type: 'content_block_start' as const,
+          index: 0,
+          block: { type: 'tool_use' as const, id: 'toolu_1', name: 'noop', input: {} },
+        } satisfies ProviderStreamEvent;
+        yield {
+          type: 'content_block_stop' as const,
+          index: 0,
+        } satisfies ProviderStreamEvent;
+        yield {
+          type: 'message_delta' as const,
+          stopReason: 'tool_use',
+          usage: { inputTokens: 600, outputTokens: 500 },
+        } satisfies ProviderStreamEvent;
+      },
+      async generateMessage() {
+        return {
+          content: [],
+          stopReason: 'end_turn',
+          usage: { inputTokens: 600, outputTokens: 500 },
+        };
+      },
+      getModelInfo() {
+        return {
+          contextWindow: 100_000,
+          maxOutputTokens: 4_096,
+          supportsThinking: false,
+          supportsToolUse: true,
+          supportsImages: false,
+          inputTokenCostPer1M: 1.0,
+          outputTokenCostPer1M: 5.0,
+        };
+      },
+    };
+
+    const tool = {
+      name: 'noop',
+      inputSchema: z.object({}),
+      async call() {
+        return { data: 'ok' };
+      },
+      async description() {
+        return 'noop';
+      },
+      async prompt() {
+        return 'noop';
+      },
+      async checkPermissions() {
+        return { behavior: 'allow' as const };
+      },
+      isConcurrencySafe() {
+        return true;
+      },
+      isReadOnly() {
+        return true;
+      },
+      isEnabled() {
+        return true;
+      },
+      mapToolResult() {
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: 'noop',
+          content: 'ok',
+        };
+      },
+    };
+
+    const messages = [createUserMessage('Hello')];
+    const events: AgentEvent[] = [];
+    for await (const event of agentLoop(messages, {
+      provider: wrappedProvider,
+      model: 'test-model',
+      tools: [tool as any],
+      maxTurns: 10,
+      maxTokens: 1000,
+      permissionMode: 'allowAll',
+      cwd: '/tmp',
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toBe(1);
+    expect(
+      events.find((e) => e.type === 'error' && e.error.message.includes('Token budget exceeded'))
+    ).toBeDefined();
   });
 });

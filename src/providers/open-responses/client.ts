@@ -21,8 +21,10 @@ import type {
   ProviderStreamEvent,
   ProviderToolSchema,
   ProviderUsage,
+  ResponseFormat,
   StreamMessageParams,
   SystemPromptBlock,
+  ToolChoice,
 } from '../types.js';
 import { OPEN_RESPONSES_DEFAULT_MODEL_INFO } from './models.js';
 
@@ -85,10 +87,22 @@ interface OpenResponsesRequestBody {
   temperature?: number;
   top_p?: number;
   tools?: FunctionToolParam[];
-  tool_choice?: string;
+  tool_choice?: string | { type: 'function'; name: string };
+  text?: { format?: OpenResponsesTextFormat };
   reasoning?: { effort?: string };
   stream?: boolean;
 }
+
+type OpenResponsesTextFormat =
+  | { type: 'text' }
+  | { type: 'json_object' }
+  | {
+      type: 'json_schema';
+      name: string;
+      description?: string;
+      schema: Record<string, unknown>;
+      strict?: boolean;
+    };
 
 /** An output item from the API response. */
 interface OutputItem {
@@ -178,7 +192,16 @@ export class OpenResponsesProvider implements ModelProvider {
   // -------------------------------------------------------------------------
 
   getModelInfo(_modelId: string): ModelInfo {
-    return this.modelInfo;
+    return {
+      ...this.modelInfo,
+      supportsToolChoice: this.modelInfo.supportsToolChoice ?? true,
+      supportsResponseFormat: this.modelInfo.supportsResponseFormat ?? [
+        'text',
+        'json_object',
+        'json_schema',
+      ],
+      responseFormatStrategy: this.modelInfo.responseFormatStrategy ?? 'native',
+    };
   }
 
   async *streamMessage(params: StreamMessageParams): AsyncGenerator<ProviderStreamEvent> {
@@ -226,11 +249,55 @@ export class OpenResponsesProvider implements ModelProvider {
     if (params.topP != null) body.top_p = params.topP;
     if (tools && tools.length > 0) {
       body.tools = tools;
-      body.tool_choice = 'auto';
     }
+
+    // tool_choice — only meaningful when tools are present (or forcibly 'none')
+    if (params.toolChoice) {
+      const mapped = this.mapToolChoice(params.toolChoice);
+      if (mapped !== undefined) body.tool_choice = mapped;
+    }
+
+    // responseFormat — Open Responses spec uses the `text.format` field.
+    if (params.responseFormat) {
+      const mapped = this.mapResponseFormat(params.responseFormat);
+      if (mapped !== undefined) body.text = { format: mapped };
+    }
+
     if (reasoning) body.reasoning = reasoning;
 
     return body;
+  }
+
+  private mapToolChoice(
+    choice: ToolChoice
+  ): string | { type: 'function'; name: string } | undefined {
+    switch (choice.type) {
+      case 'auto':
+        return 'auto';
+      case 'any':
+        return 'required';
+      case 'none':
+        return 'none';
+      case 'tool':
+        return { type: 'function', name: choice.name };
+    }
+  }
+
+  private mapResponseFormat(format: ResponseFormat): OpenResponsesTextFormat | undefined {
+    switch (format.type) {
+      case 'text':
+        return { type: 'text' };
+      case 'json_object':
+        return { type: 'json_object' };
+      case 'json_schema':
+        return {
+          type: 'json_schema',
+          name: format.name,
+          schema: format.schema,
+          ...(format.description !== undefined ? { description: format.description } : {}),
+          ...(format.strict !== undefined ? { strict: format.strict } : {}),
+        };
+    }
   }
 
   /** Convert `ProviderMessage[]` to Open Responses `input` array. */

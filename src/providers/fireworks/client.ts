@@ -25,7 +25,7 @@ export class FireworksProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getFireworksModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getFireworksModelInfo(modelId));
   }
 }
 

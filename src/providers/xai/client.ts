@@ -25,7 +25,7 @@ export class XAIProvider extends OpenAICompatibleProvider {
   }
 
   getModelInfo(modelId: string): ModelInfo {
-    return getXAIModelInfo(modelId);
+    return this.withStructuredOutputDefaults(getXAIModelInfo(modelId));
   }
 }
 
