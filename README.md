@@ -201,7 +201,8 @@ const session = await agent.createSession({ id: 'my-session' });
 - beta 发布由 `.github/workflows/prerelease.yml` 管理
 - workflow 触发方式为 GitHub Actions 页面手动运行 `Prerelease (Beta)`
 - workflow 输入参数 `ref` 默认为 `dev`，可指定任意需要发布的 git ref
-- beta workflow 会执行 `changeset version --snapshot beta` 生成临时 prerelease 版本，再发布到 npm `beta` dist-tag
+- beta workflow 会执行 `changeset version --snapshot beta` 生成基于 Changesets 计算版本的临时 prerelease 版本，再发布到 npm `beta` dist-tag
+- 发布后可通过 `npm view zero-agent-sdk dist-tags` 或 `npm view zero-agent-sdk@beta version` 验证当前 beta 版本
 
 ### Live 测试
 
