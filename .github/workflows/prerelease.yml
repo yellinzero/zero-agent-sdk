@@ -36,20 +36,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm build
+      - name: Version beta snapshot
+        run: pnpm changeset version --snapshot beta
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set beta version
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          VERSION=$(node -p "require('./package.json').version")
-          BASE_VERSION="${VERSION%%-*}"
-          BETA_VERSION="${BASE_VERSION}-beta.${SHA}"
-          node -e "
-            const pkg = require('./package.json');
-            pkg.version = '${BETA_VERSION}';
-            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          echo "Publishing version: ${BETA_VERSION}"
+      - run: pnpm build
 
       - name: Publish beta to NPM
         run: pnpm pub:beta
