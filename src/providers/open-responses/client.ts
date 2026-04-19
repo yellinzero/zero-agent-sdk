@@ -10,6 +10,7 @@
  */
 
 import { ProviderError } from '../../core/errors.js';
+import { normalizeForProvider } from '../../loop/schema-utils.js';
 import type {
   GenerateMessageParams,
   ModelInfo,
@@ -293,7 +294,7 @@ export class OpenResponsesProvider implements ModelProvider {
         return {
           type: 'json_schema',
           name: format.name,
-          schema: format.schema,
+          schema: normalizeForProvider(format.schema, 'openai-strict'),
           ...(format.description !== undefined ? { description: format.description } : {}),
           ...(format.strict !== undefined ? { strict: format.strict } : {}),
         };

@@ -5,6 +5,7 @@
  * and only need to configure baseUrl, apiKey, and model catalog.
  */
 
+import { normalizeForProvider } from '../../loop/schema-utils.js';
 import type {
   GenerateMessageParams,
   ModelInfo,
@@ -409,7 +410,7 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
     }
   }
 
-  protected mapResponseFormat(format: ResponseFormat, _dialect: ResponseFormatDialect): unknown {
+  protected mapResponseFormat(format: ResponseFormat, dialect: ResponseFormatDialect): unknown {
     switch (format.type) {
       case 'text':
         return { type: 'text' };
@@ -420,7 +421,7 @@ export abstract class OpenAICompatibleProvider implements ModelProvider {
           type: 'json_schema',
           json_schema: {
             name: format.name,
-            schema: format.schema,
+            schema: normalizeForProvider(format.schema, dialect),
             ...(format.description !== undefined ? { description: format.description } : {}),
             ...(format.strict !== undefined ? { strict: format.strict } : {}),
           },

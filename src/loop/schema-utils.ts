@@ -3,10 +3,22 @@ import type { ResponseFormatDialect } from '../providers/types.js';
 
 const schemaCache = new WeakMap<z.ZodType, Record<string, unknown>>();
 
+/**
+ * Convert a Zod schema to a canonical JSON Schema (Draft 2020-12).
+ *
+ * Draft 2020-12 is the default Zod 4 emits and the only form OpenAI's strict
+ * `response_format: json_schema` accepts — nullable fields render as
+ * `anyOf: [T, { type: "null" }]` rather than OpenAPI-3.0's `nullable: true`.
+ * Per-provider dialect tweaks (including translating back to `nullable` for
+ * Gemini) live in `normalizeForProvider`.
+ *
+ * `$schema` is stripped because most providers reject the keyword inside
+ * `response_format.json_schema.schema` / tool `parameters`.
+ */
 export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   let cached = schemaCache.get(schema);
   if (cached) return cached;
-  cached = z.toJSONSchema(schema, { target: 'openapi-3.0' }) as Record<string, unknown>;
+  cached = z.toJSONSchema(schema, { target: 'draft-2020-12' }) as Record<string, unknown>;
   delete cached.$schema;
   schemaCache.set(schema, cached);
   return cached;
@@ -47,13 +59,20 @@ export function normalizeForProvider(
 ): Record<string, unknown> {
   switch (dialect) {
     case 'standard':
-      return cloneSchema(schema);
+      return normalizeObjectTree(cloneSchema(schema), {
+        formatWhitelist: null,
+        expandRefs: false,
+        collapseDiscriminatedUnions: false,
+        rewriteOneOf: false,
+        nullableMode: 'anyOf',
+      });
     case 'openai-strict':
       return normalizeObjectTree(cloneSchema(schema), {
         formatWhitelist: OPENAI_ALLOWED_FORMATS,
         expandRefs: false,
         collapseDiscriminatedUnions: true,
         rewriteOneOf: false,
+        nullableMode: 'anyOf',
       });
     case 'gemini':
       return normalizeObjectTree(expandLocalRefs(cloneSchema(schema)), {
@@ -61,6 +80,7 @@ export function normalizeForProvider(
         expandRefs: true,
         collapseDiscriminatedUnions: true,
         rewriteOneOf: true,
+        nullableMode: 'nullable',
       });
     case 'anthropic':
       return normalizeObjectTree(cloneSchema(schema), {
@@ -68,6 +88,7 @@ export function normalizeForProvider(
         expandRefs: false,
         collapseDiscriminatedUnions: false,
         rewriteOneOf: false,
+        nullableMode: 'anyOf',
       });
   }
 }
@@ -76,27 +97,30 @@ function cloneSchema<T>(value: T): T {
   return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
 }
 
+interface NormalizeOptions {
+  /** Allowed `format` values; `null` means keep all. */
+  formatWhitelist: Set<string> | null;
+  expandRefs: boolean;
+  collapseDiscriminatedUnions: boolean;
+  rewriteOneOf: boolean;
+  /**
+   * How nullable fields should be represented on the wire:
+   * - `anyOf` — canonical Draft 2020-12 form `{ anyOf: [T, { type: "null" }] }`;
+   *   any incoming `{ type: T, nullable: true }` is expanded into this shape.
+   * - `nullable` — OpenAPI 3.0 / Gemini Schema form `{ type: T, nullable: true }`;
+   *   any incoming `{ anyOf: [T, { type: "null" }] }` is collapsed into this shape.
+   */
+  nullableMode: 'anyOf' | 'nullable';
+}
+
 function normalizeObjectTree(
   schema: Record<string, unknown>,
-  options: {
-    formatWhitelist: Set<string>;
-    expandRefs: boolean;
-    collapseDiscriminatedUnions: boolean;
-    rewriteOneOf: boolean;
-  }
+  options: NormalizeOptions
 ): Record<string, unknown> {
   return normalizeNode(schema, options) as Record<string, unknown>;
 }
 
-function normalizeNode(
-  node: unknown,
-  options: {
-    formatWhitelist: Set<string>;
-    expandRefs: boolean;
-    collapseDiscriminatedUnions: boolean;
-    rewriteOneOf: boolean;
-  }
-): unknown {
+function normalizeNode(node: unknown, options: NormalizeOptions): unknown {
   if (Array.isArray(node)) {
     return node.map((item) => normalizeNode(item, options));
   }
@@ -106,12 +130,21 @@ function normalizeNode(
   }
 
   const input = node as Record<string, unknown>;
+
+  const rewritten = applyNullableMode(input, options);
+  if (rewritten !== input) return rewritten;
+
   const out: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(input)) {
     if ((key === '$defs' || key === 'definitions') && options.expandRefs) continue;
     if (key === '$ref' && options.expandRefs) continue;
-    if (key === 'format' && typeof value === 'string' && !options.formatWhitelist.has(value)) {
+    if (
+      key === 'format' &&
+      typeof value === 'string' &&
+      options.formatWhitelist !== null &&
+      !options.formatWhitelist.has(value)
+    ) {
       continue;
     }
 
@@ -148,6 +181,82 @@ function normalizeNode(
   }
 
   return out;
+}
+
+/**
+ * Translate between the two nullable representations allowed by JSON Schema
+ * and OpenAPI 3.0. Returns a new node when a rewrite is performed, otherwise
+ * the original reference so the caller knows to continue normal traversal.
+ */
+function applyNullableMode(
+  node: Record<string, unknown>,
+  options: NormalizeOptions
+): Record<string, unknown> {
+  if (options.nullableMode === 'anyOf') {
+    const expanded = expandLegacyNullable(node);
+    if (expanded !== node) return normalizeNode(expanded, options) as Record<string, unknown>;
+    return node;
+  }
+
+  const collapsed = collapseAnyOfNull(node);
+  if (collapsed !== node) return normalizeNode(collapsed, options) as Record<string, unknown>;
+  return node;
+}
+
+function expandLegacyNullable(node: Record<string, unknown>): Record<string, unknown> {
+  if (node.nullable !== true) return node;
+
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'nullable') continue;
+    rest[key] = value;
+  }
+
+  const existingAnyOf = Array.isArray(rest.anyOf) ? (rest.anyOf as unknown[]) : undefined;
+  if (existingAnyOf) {
+    if (
+      !existingAnyOf.some(
+        (variant) => isObject(variant) && (variant as Record<string, unknown>).type === 'null'
+      )
+    ) {
+      rest.anyOf = [...existingAnyOf, { type: 'null' }];
+    }
+    return rest;
+  }
+
+  const existingOneOf = Array.isArray(rest.oneOf) ? (rest.oneOf as unknown[]) : undefined;
+  if (existingOneOf) {
+    if (
+      !existingOneOf.some(
+        (variant) => isObject(variant) && (variant as Record<string, unknown>).type === 'null'
+      )
+    ) {
+      rest.oneOf = [...existingOneOf, { type: 'null' }];
+    }
+    return rest;
+  }
+
+  return { anyOf: [rest, { type: 'null' }] };
+}
+
+function collapseAnyOfNull(node: Record<string, unknown>): Record<string, unknown> {
+  const anyOf = node.anyOf;
+  if (!Array.isArray(anyOf) || anyOf.length !== 2) return node;
+
+  const nullIndex = anyOf.findIndex(
+    (variant) => isObject(variant) && Object.keys(variant).length === 1 && variant.type === 'null'
+  );
+  if (nullIndex === -1) return node;
+  const other = anyOf[1 - nullIndex];
+  if (!isObject(other)) return node;
+
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'anyOf') continue;
+    rest[key] = value;
+  }
+
+  return { ...other, ...rest, nullable: true };
 }
 
 function intersectRequiredFields(variants: Record<string, unknown>[]): string[] {

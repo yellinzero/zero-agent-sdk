@@ -199,11 +199,63 @@ describe('OpenAI-compatible structured output', () => {
       type: 'json_schema',
       json_schema: {
         name: 'result',
-        schema,
+        // Schema is cloned by normalizeForProvider, so check structural equality only.
+        schema: { type: 'object', properties: { answer: { type: 'string' } } },
         description: 'A result',
         strict: true,
       },
     });
+  });
+
+  it('rewrites OpenAPI-style `nullable: true` to Draft 2020-12 anyOf for strict mode', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        age: { type: 'number', nullable: true },
+      },
+      required: ['name', 'age'],
+      additionalProperties: false,
+    };
+    const req = provider.build({
+      ...baseParams,
+      responseFormat: {
+        type: 'json_schema',
+        name: 'result',
+        schema,
+        strict: true,
+      },
+    });
+    const body = req.response_format as {
+      json_schema: { schema: Record<string, unknown> };
+    };
+    const normalized = body.json_schema.schema;
+    const props = normalized.properties as Record<string, Record<string, unknown>>;
+    expect(props.age).toEqual({
+      anyOf: [{ type: 'number' }, { type: 'null' }],
+    });
+    expect(props.age.nullable).toBeUndefined();
+  });
+
+  it('emits Draft 2020-12 anyOf for nullable Zod schemas on the wire', () => {
+    const out = Output.object({
+      schema: z.object({
+        name: z.string(),
+        bio: z.string().nullable(),
+      }),
+    });
+    const req = provider.build({ ...baseParams, responseFormat: out.responseFormat });
+    const body = req.response_format as {
+      json_schema: { schema: Record<string, unknown> };
+    };
+    const wireSchema = body.json_schema.schema;
+    const props = wireSchema.properties as Record<string, Record<string, unknown>>;
+    expect(props.bio).toMatchObject({
+      anyOf: [{ type: 'string' }, { type: 'null' }],
+    });
+    expect(props.bio.nullable).toBeUndefined();
+    expect(JSON.stringify(wireSchema)).not.toContain('"nullable":true');
+    expect(JSON.stringify(wireSchema)).not.toContain('"$schema"');
   });
 
   it('omits tool_choice and response_format when neither is provided', () => {
